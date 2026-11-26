@@ -1026,3 +1026,27 @@ impl Settings {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_handles_empty_long_and_unicode_paths() {
+        let mut s = Settings::default();
+        s.exe = String::new();
+        s.game_dir = String::new();
+        s.runner = String::new();
+        s.upscaler_dir = String::new();
+        assert!(!s.resolved_runner().as_os_str().is_empty());
+        assert_eq!(s.display_mode_label(), "1600 × 900");
+
+        let long_seg = "a".repeat(260);
+        s.exe = format!(r"C:\Titles\日本語\テスト\{long_seg}\title.exe");
+        s.game_dir = format!(r"C:\Titles\日本語\テスト\{long_seg}");
+        s.runner = r"C:\Tools\日本語\victory.exe".into();
+        s.upscaler_dir = r"C:\Tools\FSR_テスト".into();
+        assert_eq!(s.resolved_runner(), PathBuf::from(r"C:\Tools\日本語\victory.exe"));
+        assert!(s.is_series_s());
+    }
+}

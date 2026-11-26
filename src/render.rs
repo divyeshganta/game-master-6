@@ -91,6 +91,7 @@ pub enum Target {
     BrowseExe,
     BrowseGameDir,
     BrowseRunner,
+    PastePath(usize),
     BrowseUpscalerDir,
     ClearUpscalerDir,
     SelectLog(usize),
@@ -2462,13 +2463,17 @@ unsafe fn draw_settings(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(
     let p_h = if compact { 40 } else { 46 };
     let p_step = if compact { 46 } else { 52 };
     let mut y = r.top + 84;
-    for (lbl, val, target) in paths {
+    for (idx, (lbl, val, target)) in paths.iter().enumerate() {
         let row = RECT::new(r.left + 24, y, r.right - 24, y + p_h);
         rounded_rect(hdc, row, COL_PANEL_ALT, COL_BORDER, 10);
         draw_text(hdc, lbl, RECT::new(row.left + 14, row.top + 3, row.left + 250, row.top + 20), ctx.fonts.small_bold, COL_CYAN, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        draw_text(hdc, val, RECT::new(row.left + 14, row.top + 20, row.right - 130, row.bottom - 3), ctx.fonts.small, COL_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
+        let display_val = if val.trim().is_empty() { "(Not set — click Browse or Paste)" } else { val };
+        draw_text(hdc, display_val, RECT::new(row.left + 14, row.top + 20, row.right - 216, row.bottom - 3), ctx.fonts.small, if val.trim().is_empty() { COL_MUTED } else { COL_TEXT }, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
         let btn = RECT::new(row.right - 116, row.top + 6, row.right - 10, row.bottom - 6);
-        draw_button(hdc, btn, "BROWSE...", ctx.fonts.small_bold, ctx.hover == target, COL_WHITE, target, hits);
+        draw_button(hdc, btn, "BROWSE...", ctx.fonts.small_bold, ctx.hover == *target, COL_WHITE, *target, hits);
+        let paste_tgt = Target::PastePath(idx);
+        let paste_r = RECT::new(btn.left - 88, row.top + 6, btn.left - 8, row.bottom - 6);
+        draw_button(hdc, paste_r, "PASTE", ctx.fonts.small_bold, ctx.hover == paste_tgt, COL_CYAN, paste_tgt, hits);
         y += p_step;
     }
 

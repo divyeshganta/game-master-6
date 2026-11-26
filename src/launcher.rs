@@ -616,7 +616,7 @@ fn parse_live_frame_telemetry(line: &str) -> Option<LiveFrameTelemetry> {
 
     let dropped_draws = line
         .find("dropped ")
-        .and_then(|di| line[di + 8..].split_whitespace().next())
+        .and_then(|di| line.get(di + 8..)?.split_whitespace().next())
         .and_then(|s| s.parse::<u32>().ok())
         .unwrap_or(0);
 

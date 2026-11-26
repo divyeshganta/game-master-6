@@ -530,6 +530,7 @@ extern "system" {
     pub fn GetKeyState(n_virt_key: c_int) -> i16;
     pub fn OpenClipboard(h_wnd_new_owner: HWND) -> BOOL;
     pub fn EmptyClipboard() -> BOOL;
+    pub fn GetClipboardData(u_format: UINT) -> HANDLE;
     pub fn SetClipboardData(u_format: UINT, h_mem: HANDLE) -> HANDLE;
     pub fn CloseClipboard() -> BOOL;
     pub fn SetLayeredWindowAttributes(hwnd: HWND, cr_key: DWORD, b_alpha: u8, dw_flags: DWORD) -> BOOL;
@@ -707,65 +708,63 @@ pub fn local_timestamp_human() -> String {
     )
 }
 
-pub unsafe fn browse_file(hwnd: HWND, title: &str, filter_pairs: &[(&str, &str)], initial: &str) -> Option<String> {
-    let mut filter: Vec<u16> = Vec::new();
-    for (desc, pat) in filter_pairs {
-        filter.extend(desc.encode_utf16());
-        filter.push(0);
-        filter.extend(pat.encode_utf16());
-        filter.push(0);
-    }
-    filter.push(0);
-
-    let mut file_buf = vec![0u16; 1024];
-    let title_w = wide(title);
+/// Opens a native file picker in an isolated hidden STA PowerShell subprocess so Explorer
+/// shell extensions and modal message loops never crash or re-enter the main Win32 process.
+pub unsafe fn browse_file(_hwnd: HWND, title: &str, filter_pairs: &[(&str, &str)], initial: &str) -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let filter_str: String = filter_pairs
+        .iter()
+        .map(|(d, p)| format!("{d}|{p}"))
+        .collect::<Vec<_>>()
+        .join("|");
+    let t = title.replace('\'', "''");
+    let flt = filter_str.replace('\'', "''");
     let init_dir = Path::new(initial)
         .parent()
         .filter(|p| p.is_dir())
-        .map(|p| wide(&p.to_string_lossy()));
-
-    let mut ofn: OPENFILENAMEW = std::mem::zeroed();
-    ofn.l_struct_size = std::mem::size_of::<OPENFILENAMEW>() as DWORD;
-    ofn.hwnd_owner = hwnd;
-    ofn.lpstr_filter = filter.as_ptr();
-    ofn.lpstr_file = file_buf.as_mut_ptr();
-    ofn.n_max_file = file_buf.len() as DWORD;
-    ofn.lpstr_title = title_w.as_ptr();
-    ofn.lpstr_initial_dir = init_dir.as_ref().map_or(std::ptr::null(), |v| v.as_ptr());
-    ofn.flags = OFN_EXPLORER | OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST | OFN_HIDEREADONLY | OFN_NOCHANGEDIR;
-
-    if GetOpenFileNameW(&mut ofn) != 0 {
-        let chosen = from_wide_slice(&file_buf);
-        if !chosen.is_empty() {
-            return Some(chosen);
-        }
-    }
-    None
+        .map(|p| p.to_string_lossy().replace('\'', "''"))
+        .unwrap_or_default();
+    let ps = format!(
+        "Add-Type -AssemblyName System.Windows.Forms; \
+         $d = New-Object System.Windows.Forms.OpenFileDialog; \
+         $d.Title = '{t}'; \
+         $d.Filter = '{flt}'; \
+         if ('{init_dir}' -ne '' -and (Test-Path '{init_dir}')) {{ $d.InitialDirectory = '{init_dir}'; }} \
+         if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ [Console]::OutputEncoding = [Text.Encoding]::UTF8; Write-Output ('OK:' + $d.FileName) }}"
+    );
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", &ps])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text.lines().find(|l| l.starts_with("OK:"))?;
+    let path = line.strip_prefix("OK:")?.trim().to_string();
+    if path.is_empty() { None } else { Some(path) }
 }
 
-pub unsafe fn browse_folder(hwnd: HWND, title: &str) -> Option<String> {
-    let mut display = vec![0u16; 1024];
-    let title_w = wide(title);
-    let mut bi: BROWSEINFOW = std::mem::zeroed();
-    bi.hwnd_owner = hwnd;
-    bi.psz_display_name = display.as_mut_ptr();
-    bi.lpsz_title = title_w.as_ptr();
-    bi.ul_flags = BIF_RETURNONLYFSDIRS | BIF_NEWDIALOGSTYLE | BIF_EDITBOX;
-
-    let pidl = SHBrowseForFolderW(&mut bi);
-    if pidl.is_null() {
-        return None;
-    }
-    let mut path_buf = vec![0u16; 1024];
-    let ok = SHGetPathFromIDListW(pidl, path_buf.as_mut_ptr());
-    CoTaskMemFree(pidl);
-    if ok != 0 {
-        let chosen = from_wide_slice(&path_buf);
-        if !chosen.is_empty() {
-            return Some(chosen);
-        }
-    }
-    None
+/// Opens a native folder picker in an isolated hidden STA PowerShell subprocess.
+pub unsafe fn browse_folder(_hwnd: HWND, title: &str) -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let t = title.replace('\'', "''");
+    let ps = format!(
+        "Add-Type -AssemblyName System.Windows.Forms; \
+         $d = New-Object System.Windows.Forms.FolderBrowserDialog; \
+         $d.Description = '{t}'; \
+         $d.ShowNewFolderButton = $true; \
+         if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) {{ [Console]::OutputEncoding = [Text.Encoding]::UTF8; Write-Output ('OK:' + $d.SelectedPath) }}"
+    );
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-Command", &ps])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    let line = text.lines().find(|l| l.starts_with("OK:"))?;
+    let path = line.strip_prefix("OK:")?.trim().to_string();
+    if path.is_empty() { None } else { Some(path) }
 }
 
 pub unsafe fn open_path(hwnd: HWND, path: &Path) {
@@ -1217,6 +1216,33 @@ pub unsafe fn detect_xinput_pads() -> u32 {
 const CF_UNICODETEXT: UINT = 13;
 const GMEM_MOVEABLE: UINT = 0x0002;
 
+/// Reads UTF-16LE text (`CF_UNICODETEXT`) from the Windows clipboard safely.
+pub unsafe fn paste_from_clipboard(hwnd: HWND) -> Option<String> {
+    if OpenClipboard(hwnd) == 0 {
+        return None;
+    }
+    let hmem = GetClipboardData(CF_UNICODETEXT);
+    let res = if !hmem.is_null() {
+        let ptr = GlobalLock(hmem) as *const u16;
+        if !ptr.is_null() {
+            let mut len = 0usize;
+            while len < 8192 && *ptr.add(len) != 0 {
+                len += 1;
+            }
+            let slice = std::slice::from_raw_parts(ptr, len);
+            let s = String::from_utf16_lossy(slice);
+            GlobalUnlock(hmem);
+            Some(s)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    CloseClipboard();
+    res
+}
+
 /// Copies UTF-8 text into the Windows clipboard as UTF-16LE (`CF_UNICODETEXT`).
 pub unsafe fn copy_to_clipboard(hwnd: HWND, text: &str) -> bool {
     if OpenClipboard(hwnd) == 0 {
@@ -1414,7 +1440,7 @@ pub fn prompt_text_input(title: &str, prompt: &str, default_val: &str) -> Option
         .ok()?;
     let text = String::from_utf8_lossy(&out.stdout);
     let line = text.lines().find(|l| l.starts_with("OK:"))?;
-    Some(line[3..].trim().to_string())
+    line.strip_prefix("OK:").map(|s| s.trim().to_string())
 }
 
 /// Probes true 64-bit dedicated VRAM (GB) for discrete GPUs from Windows Display Class registry.

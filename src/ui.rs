@@ -86,6 +86,7 @@ struct AppState {
     tip_rx: Option<Receiver<(bool, String)>>,
     last_tip_probe: Instant,
     is_first_run: bool,
+    modal_open: bool,
 }
 
 impl AppState {
@@ -270,6 +271,24 @@ unsafe fn state(hwnd: HWND) -> &'static mut AppState {
 
 unsafe fn redraw(hwnd: HWND) {
     InvalidateRect(hwnd, std::ptr::null(), 0);
+}
+
+/// Pauses WM_TIMER and prevents re-entrant AppState borrows while a modal dialog is open.
+unsafe fn run_modal<T>(hwnd: HWND, f: impl FnOnce() -> T) -> Option<T> {
+    {
+        let st = state(hwnd);
+        if st.modal_open {
+            return None;
+        }
+        st.modal_open = true;
+    }
+    KillTimer(hwnd, TIMER_ID);
+    let res = f();
+    let st = state(hwnd);
+    st.modal_open = false;
+    let interval = if st.session.is_some() { 150 } else { 250 };
+    SetTimer(hwnd, TIMER_ID, interval, None);
+    Some(res)
 }
 
 unsafe fn show_msg(hwnd: HWND, body: &str, title: &str, flags: UINT) -> c_int {
@@ -814,29 +833,67 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             }
         }
         Target::BrowseExe => {
-            if let Some(p) = browse_file(hwnd, "Select title executable", &[("Executables (*.exe)", "*.exe"), ("All Files", "*.*")], &st.settings.exe) {
+            let init = st.settings.exe.clone();
+            if let Some(Some(p)) = run_modal(hwnd, || {
+                browse_file(hwnd, "Select title executable", &[("Executables (*.exe)", "*.exe"), ("All Files", "*.*")], &init)
+            }) {
+                let st = state(hwnd);
                 st.settings.exe = p;
-                st.save_settings("Game executable updated");
+                st.save_settings("Title executable updated");
                 redraw(hwnd);
             }
         }
         Target::BrowseGameDir => {
-            if let Some(p) = browse_folder(hwnd, "Select Title Data Folder") {
+            if let Some(Some(p)) = run_modal(hwnd, || browse_folder(hwnd, "Select Title Data Folder")) {
+                let st = state(hwnd);
                 st.settings.game_dir = p;
-                st.save_settings("Game data folder updated");
+                st.save_settings("Title data folder updated");
                 st.start_size_scan();
                 redraw(hwnd);
             }
         }
         Target::BrowseRunner => {
-            if let Some(p) = browse_file(hwnd, "Select Compatibility Runner (GameRunner.exe)", &[("Executables (*.exe)", "*.exe")], &st.settings.runner) {
+            let init = st.settings.runner.clone();
+            if let Some(Some(p)) = run_modal(hwnd, || {
+                browse_file(hwnd, "Select Compatibility Runner (victory.exe)", &[("Executables (*.exe)", "*.exe")], &init)
+            }) {
+                let st = state(hwnd);
                 st.settings.runner = p;
                 st.save_settings("Runner executable updated");
                 redraw(hwnd);
             }
         }
+        Target::PastePath(idx) => {
+            if let Some(raw) = paste_from_clipboard(hwnd) {
+                let cleaned = raw.trim().trim_matches('"').trim().to_string();
+                if cleaned.is_empty() {
+                    st.set_toast("Clipboard is empty");
+                } else {
+                    match idx {
+                        0 => {
+                            st.settings.exe = cleaned;
+                            st.save_settings("Pasted title executable path");
+                        }
+                        1 => {
+                            st.settings.game_dir = cleaned;
+                            st.save_settings("Pasted title data folder");
+                            st.start_size_scan();
+                        }
+                        _ => {
+                            st.settings.runner = cleaned;
+                            st.save_settings("Pasted runner executable path");
+                        }
+                    }
+                }
+                redraw(hwnd);
+            } else {
+                st.set_toast("No text found in clipboard");
+                redraw(hwnd);
+            }
+        }
         Target::BrowseUpscalerDir => {
-            if let Some(p) = browse_folder(hwnd, "Select Signed Host Upscaler DLL Folder") {
+            if let Some(Some(p)) = run_modal(hwnd, || browse_folder(hwnd, "Select Host Upscaler DLL Folder")) {
+                let st = state(hwnd);
                 st.settings.upscaler_dir = p;
                 st.settings.upscaler_enabled = true;
                 st.save_settings("Upscaler folder set & enabled");
@@ -1248,22 +1305,30 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             redraw(hwnd);
         }
         Target::EditCustomEnv => {
-            if let Some(val) = prompt_text_input(
-                "Edit Custom Environment Variables",
-                "Semicolon-separated KEY=VALUE pairs (e.g. VICTORY_D3D12_DEBUG=1):",
-                &st.settings.custom_env,
-            ) {
+            let cur = st.settings.custom_env.clone();
+            if let Some(Some(val)) = run_modal(hwnd, || {
+                prompt_text_input(
+                    "Edit Custom Environment Variables",
+                    "Semicolon-separated KEY=VALUE pairs (e.g. VICTORY_D3D12_DEBUG=1):",
+                    &cur,
+                )
+            }) {
+                let st = state(hwnd);
                 st.settings.custom_env = val;
                 st.save_settings("Custom environment variables saved");
                 redraw(hwnd);
             }
         }
         Target::EditTitleArgs => {
-            if let Some(val) = prompt_text_input(
-                "Edit Title Launch Arguments",
-                "Extra CLI flags passed to the title executable after -- :",
-                &st.settings.title_args,
-            ) {
+            let cur = st.settings.title_args.clone();
+            if let Some(Some(val)) = run_modal(hwnd, || {
+                prompt_text_input(
+                    "Edit Title Launch Arguments",
+                    "Extra CLI flags passed to the title executable after -- :",
+                    &cur,
+                )
+            }) {
+                let st = state(hwnd);
                 st.settings.title_args = val;
                 st.save_settings("Title launch arguments saved");
                 redraw(hwnd);
@@ -1554,12 +1619,15 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             }
         }
         Target::ImportRunner => {
-            if let Some(p) = browse_file(
-                hwnd,
-                "Import Runner Executable (victory.exe)",
-                &[("Executables (*.exe)", "*.exe"), ("All Files", "*.*")],
-                "",
-            ) {
+            if let Some(Some(p)) = run_modal(hwnd, || {
+                browse_file(
+                    hwnd,
+                    "Import Runner Executable (victory.exe)",
+                    &[("Executables (*.exe)", "*.exe"), ("All Files", "*.*")],
+                    "",
+                )
+            }) {
+                let st = state(hwnd);
                 match crate::runners::import_runner_exe(std::path::Path::new(&p)) {
                     Ok((name, dst)) => {
                         st.settings.runner = dst.to_string_lossy().to_string();
@@ -1664,6 +1732,9 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
 
 unsafe fn on_timer(hwnd: HWND) {
     let st = state(hwnd);
+    if st.modal_open {
+        return;
+    }
     let mut changed = false;
 
     if let Some(ref prx) = st.portwatch_rx {
@@ -2056,6 +2127,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 tip_rx: None,
                 last_tip_probe: Instant::now(),
                 is_first_run: !Settings::path().is_file(),
+                modal_open: false,
             });
             st.slow_shaders = extract_slow_shaders(&st.log_lines, 6);
             st.sync_telemetry_and_census(true);
