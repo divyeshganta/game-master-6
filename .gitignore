@@ -1,0 +1,12 @@
+/target/
+*.zip
+logs/
+cache/
+caches/
+backups/
+captures/
+profiles/
+reports/
+config.json
+*.settings
+*.log
