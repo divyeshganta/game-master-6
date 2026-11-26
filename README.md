@@ -18,11 +18,46 @@ A lightweight, zero-dependency Windows Win32/GDI GUI frontend, hardware-adaptive
 4. Choose a preset (`LOW`, `BALANCED`, or `HIGH`) and `SERIES-S` / `SERIES-X` console mode, run **PREPARE CACHE** if supported, and click **LAUNCH TITLE**.
 
 ## Building from Source
-Requires Rust (`cargo`) on Windows x86_64:
 
+### Prerequisites
+- **Windows 10 / 11 (x86_64)**
+- **Rust toolchain** via [rustup](https://rustup.rs/) (`stable-x86_64-pc-windows-msvc`)
+- **Visual Studio Build Tools** (or Visual Studio) with the *Desktop development with C++* workload (Windows SDK + MSVC linker)
+
+### Build & Test
 ```powershell
-cargo build --release
+git clone https://github.com/<your-username>/Game-Master-6.git
+cd Game-Master-6
 cargo test
+cargo build --release
 ```
 
-The compiled binary will be output to `target\release\GameMaster6.exe`.
+The compiled binary is output to `target\release\GameMaster6.exe`.
+
+## Project Structure
+
+```text
+src/
+├── main.rs          # Application entry point
+├── ui.rs            # Win32 window loop, event/input handling, background worker polling
+├── render.rs        # Custom Win32 GDI renderer for all tabs, cards, sparklines, and controls
+├── win32.rs         # Raw Win32 FFI bindings (GDI, WinINet, Registry, XInput, Power/Process APIs)
+├── config.rs        # Persistent settings loader/saver and option cyclers
+├── presets.rs       # Hardware-adaptive VRAM-tier presets (8 GB, 12 GB, 16 GB, 24 GB+)
+├── preflight.rs     # Live 0–100 hardware & system readiness scorer
+├── launcher.rs      # Runner environment builder, process launcher, and shader census runner
+├── runners.rs       # Local runner discovery, rollback, and cache directory management
+├── builder.rs       # Automated runner build helper script generator
+├── diagnostics.rs   # System probes, RAM/commit/process tips, log parsing, and debug bundles
+├── telemetry.rs     # Log-synced session history, unified FPS parser, and A/B scorecard
+├── ab_bench.rs      # A/B experiment flag definitions
+├── guardian.rs      # Crash-recovery verdict engine and Last-Known-Good settings snapshot
+├── hud.rs           # Click-through always-on-top performance HUD and center reticle overlay
+├── keymap.rs        # Keyboard/mouse stand-in keymap presets and conflict checker
+├── monitor.rs       # Live process RAM/commit usage sampler
+├── portwatch.rs     # Community runner tracker client (WinINet JSON/HTML + offline fallback)
+├── profiles.rs      # Portable profile import/export
+├── saves.rs         # Save backup/restore and mod toggle helpers
+├── shader_heal.rs   # Shader skip-list / healing helpers
+└── vram_guard.rs    # Background VRAM-heavy process detector
+```
