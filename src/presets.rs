@@ -74,9 +74,9 @@ impl PresetKind {
     }
 }
 
-/// Applies a hardware-adaptive CGBJ preset (LOW / BALANCED / HIGH) computed
+/// Applies a hardware-adaptive runner preset (LOW / BALANCED / HIGH) computed
 /// dynamically from live GPU VRAM tier and CPU core count.
-/// Every emitted parameter maps 1:1 to a verified variable in `runner_src\cgbj`.
+/// Every emitted parameter maps 1:1 to a verified runtime variable.
 pub fn apply_adaptive_preset(s: &mut Settings, preset: PresetKind, sys: &SystemInfo) -> String {
     let tier = HardwareTier::from_vram_gb(sys.vram_gb);
 
@@ -97,7 +97,7 @@ pub fn apply_adaptive_preset(s: &mut Settings, preset: PresetKind, sys: &SystemI
     s.mouse_aim = false;
     s.input_mode = "pad".into();
 
-    // Common verified CGBJ throughput & residency flags
+    // Common verified throughput & residency flags
     s.texture_no_wait = true;
     s.relay_copy = true;
     s.wide_back = true;
@@ -342,7 +342,7 @@ pub fn detect_active_preset(s: &Settings, sys: &SystemInfo) -> PresetKind {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::launcher::build_cgbj_env;
+    use crate::launcher::build_runner_env;
 
     #[test]
     fn mid12_balanced_emits_verified_v15_2_env() {
@@ -352,7 +352,7 @@ mod tests {
         sys.cpu_cores = 16;
 
         let _ = apply_adaptive_preset(&mut s, PresetKind::Balanced, &sys);
-        let env = build_cgbj_env(&s);
+        let env = build_runner_env(&s);
         let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
 
         assert_eq!(get("VICTORY_DISPLAY_MODE"), Some("1600x900"));
@@ -372,7 +372,7 @@ mod tests {
                 let mut s = Settings::default();
                 let _ = apply_adaptive_preset(&mut s, kind, &sys);
                 assert_eq!(detect_active_preset(&s, &sys), kind, "vram={vram} kind={kind:?}");
-                let env = build_cgbj_env(&s);
+                let env = build_runner_env(&s);
                 let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
                 assert_eq!(get("VICTORY_RELAY"), Some("2"), "vram={vram} kind={kind:?}");
                 assert_eq!(get("VICTORY_CARD_STEPS"), Some("2"), "vram={vram} kind={kind:?}");

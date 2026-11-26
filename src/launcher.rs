@@ -17,9 +17,9 @@ fn is_ztrx_runner(path: &Path) -> bool {
         .any(|c| c.as_os_str().to_string_lossy().eq_ignore_ascii_case("ztrx"))
 }
 
-/// Builds the exact, deduplicated list of verified CGBJ environment variables
+/// Builds the exact, deduplicated list of verified runner environment variables
 /// directly from `Settings` (zero hardcoded bypasses, zero stale/dead flags).
-pub fn build_cgbj_env(s: &Settings) -> Vec<(String, String)> {
+pub fn build_runner_env(s: &Settings) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     let mut set = |k: &str, v: String| {
         if let Some(existing) = out.iter_mut().find(|(ek, _)| ek == k) {
@@ -249,7 +249,7 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
         None
     };
 
-    let perf_env_pairs = build_cgbj_env(s);
+    let perf_env_pairs = build_runner_env(s);
     let perf_env_parts: Vec<String> = perf_env_pairs
         .iter()
         .map(|(k, v)| format!("{k}={v}"))
@@ -446,8 +446,8 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
 
     let runner_path = s.resolved_runner();
     let ztrx = is_ztrx_runner(&runner_path);
-    let cgbj = runner_path.to_string_lossy().to_ascii_lowercase().contains("cgbj");
-    let use_cache_flag = !ztrx && !cgbj;
+    let is_baseline = runner_path.to_string_lossy().to_ascii_lowercase().contains("baseline");
+    let use_cache_flag = !ztrx && !is_baseline;
     let flags_desc = if !use_cache_flag {
         format!("translate --pipelines --jobs {jobs}")
     } else {
@@ -497,7 +497,7 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
     if !s.shader_loop_limit.trim().is_empty() {
         pcmd.env("VICTORY_SHADER_LOOP_LIMIT", s.shader_loop_limit.trim());
     }
-    for (key, val) in build_cgbj_env(s) {
+    for (key, val) in build_runner_env(s) {
         pcmd.env(key, val);
     }
     let child = pcmd

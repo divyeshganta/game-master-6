@@ -75,7 +75,7 @@ pub fn load_recent_sessions(limit: usize) -> Vec<SessionRecord> {
     rows
 }
 
-/// Extracts average 3D-world FPS (lines with `draws/frame` >= 500, matching CGBJ capture.rs:123),
+/// Extracts average 3D-world FPS (lines with `draws/frame` >= 500),
 /// so menu/loading 30 FPS never masks real in-world gameplay FPS.
 pub fn extract_world_avg_fps(lines: &[String]) -> Option<f64> {
     let mut sum = 0.0f64;
@@ -104,7 +104,7 @@ pub fn extract_world_avg_fps(lines: &[String]) -> Option<f64> {
     if cnt > 0 { Some(sum / cnt as f64) } else { None }
 }
 
-/// Classifies the primary runtime bottleneck directly from CGBJ log signals.
+/// Classifies the primary runtime bottleneck directly from runner log signals.
 pub fn classify_bottleneck(lines: &[String]) -> &'static str {
     let mut vram_hit = false;
     let mut commit_hit = false;
@@ -374,7 +374,7 @@ pub fn sync_sessions_from_logs() {
             existing.push(SessionRecord {
                 timestamp: ts,
                 runner,
-                adapter: "cgbj".into(),
+                adapter: "baseline".into(),
                 console,
                 kind: "GAME RUNNER".into(),
                 duration_secs,

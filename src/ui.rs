@@ -1224,7 +1224,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         }
         Target::CycleAbExperiment => {
             let lbl = st.settings.cycle_ab_experiment();
-            st.save_settings(&format!("Live CGBJ {lbl}"));
+            st.save_settings(&format!("Live A/B {lbl}"));
             redraw(hwnd);
         }
         Target::SafeBootRollback => {
@@ -2047,7 +2047,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 runner_benches: Vec::new(),
                 mods: saves::list_mods(8),
                 listening_keybind: None,
-                shader_census: ShaderCensus { translated: 0, total: 0, refused: 0, summary: "CGBJ translator active. Click RUN CENSUS to scan the local shader archive.".into() },
+                shader_census: ShaderCensus { translated: 0, total: 0, refused: 0, summary: "Shader translator active. Click RUN CENSUS to scan the local shader archive.".into() },
                 census_rx: None,
                 last_crash: None,
                 dismissed_warning: None,

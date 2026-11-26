@@ -2,6 +2,7 @@
 name = "GameMaster6"
 version = "1.0.0"
 edition = "2021"
+description = "Hardware-adaptive Windows GUI launcher, multi-runner manager, VRAM-tier preset tuner, and live RAM/commit diagnostics for compatibility runners."
 
 [[bin]]
 name = "GameMaster6"

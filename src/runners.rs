@@ -7,7 +7,7 @@ use crate::win32::hardlink_or_copy;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RunnerKind {
-    Cgbj,
+    Baseline,
     LocalZtrx,
     VictoryFork,
     Victory,
@@ -20,7 +20,7 @@ pub enum RunnerKind {
 impl RunnerKind {
     pub fn id(self) -> &'static str {
         match self {
-            RunnerKind::Cgbj => "cgbj",
+            RunnerKind::Baseline => "baseline",
             RunnerKind::LocalZtrx => "local-ztrx",
             RunnerKind::VictoryFork => "victory-fork",
             RunnerKind::Victory => "victory",
@@ -33,7 +33,7 @@ impl RunnerKind {
 
     pub fn badge(self) -> &'static str {
         match self {
-            RunnerKind::Cgbj => "CGBJ · BASELINE",
+            RunnerKind::Baseline => "BASELINE · VICTORY",
             RunnerKind::LocalZtrx => "LOCAL ZTRX",
             RunnerKind::VictoryFork => "VICTORY-FORK · RT",
             RunnerKind::Victory => "VICTORY UPSTREAM",
@@ -46,7 +46,7 @@ impl RunnerKind {
 
     pub fn from_id(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
-            "cgbj" | "cool_fox" | "cool-fox" => Some(RunnerKind::Cgbj),
+            "baseline" | "cool_fox" | "cool-fox" => Some(RunnerKind::Baseline),
             "local-ztrx" | "local_ztrx" | "ztrx" | "zettrox" => Some(RunnerKind::LocalZtrx),
             "victory-fork" | "victory_fork" | "hyphennn" => Some(RunnerKind::VictoryFork),
             "victory" => Some(RunnerKind::Victory),
@@ -61,7 +61,7 @@ impl RunnerKind {
     pub fn is_victory_family(self) -> bool {
         matches!(
             self,
-            RunnerKind::Cgbj | RunnerKind::LocalZtrx | RunnerKind::VictoryFork | RunnerKind::Victory | RunnerKind::VictoryDiag
+            RunnerKind::Baseline | RunnerKind::LocalZtrx | RunnerKind::VictoryFork | RunnerKind::Victory | RunnerKind::VictoryDiag
         )
     }
 
@@ -71,8 +71,8 @@ impl RunnerKind {
 
     pub fn detect_from_path(path: &Path) -> Self {
         let lower = path.to_string_lossy().to_ascii_lowercase();
-        if lower.contains("cgbj") || lower.contains("cool_fox") {
-            RunnerKind::Cgbj
+        if lower.contains("baseline") || lower.contains("cool_fox") {
+            RunnerKind::Baseline
         } else if lower.contains("diag") {
             RunnerKind::VictoryDiag
         } else if lower.contains("ztrx") || lower.contains("zettrox") {
@@ -97,14 +97,14 @@ impl RunnerKind {
 
     pub fn cycle_next(self) -> Self {
         match self {
-            RunnerKind::Cgbj => RunnerKind::VictoryFork,
+            RunnerKind::Baseline => RunnerKind::VictoryFork,
             RunnerKind::LocalZtrx => RunnerKind::VictoryFork,
             RunnerKind::VictoryFork => RunnerKind::Victory,
             RunnerKind::Victory => RunnerKind::VictoryDiag,
             RunnerKind::VictoryDiag => RunnerKind::Xcl,
             RunnerKind::Xcl => RunnerKind::Xbox2Windows,
             RunnerKind::Xbox2Windows => RunnerKind::Generic,
-            RunnerKind::Generic => RunnerKind::Cgbj,
+            RunnerKind::Generic => RunnerKind::Baseline,
         }
     }
 }

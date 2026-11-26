@@ -22,7 +22,7 @@ pub fn evaluate(s: &Settings, sys: &SystemInfo, audit: &AssetAudit) -> PreFlight
     let mut issues: Vec<String> = Vec::new();
     let mut checks: Vec<(bool, String)> = Vec::new();
 
-    // 1. CPU AVX2 (required by VIctory/CGBJ)
+    // 1. CPU AVX2 (required by compatibility runner)
     if !sys.avx2 {
         score -= 40;
         let msg = "CPU lacks AVX2 support".to_string();

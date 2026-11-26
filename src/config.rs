@@ -70,7 +70,7 @@ pub struct Settings {
     pub queue2_landing_mb: String,       // "48", "96", "128" -> VICTORY_QUEUE2_LANDING_MB
     pub ambient_shade: String,           // VICTORY_AMBIENT_SHADE
     pub last_prepared_runner_sig: String,// "size:mtime" of runner that last prepared cache
-    // v15.2 hardware-adaptive & verified CGBJ residency/pipeline settings
+    // v1.0 hardware-adaptive & verified residency/pipeline settings
     pub active_preset: String,           // "low", "balanced", "high", "custom"
     pub card_buffers_mb: String,         // "", "256", "512", "1024", "2048", "4096" -> VICTORY_CARD_BUFFERS_MB
     pub texture_room_percent: String,    // "88".."97" -> VICTORY_TEXTURE_ROOM_PERCENT
@@ -100,7 +100,7 @@ impl Default for Settings {
         Self {
             exe: String::new(),
             game_dir: String::new(),
-            runner: r"runners\cgbj\victory.exe".into(),
+            runner: r"runners\baseline\victory.exe".into(),
             runner_kind: "auto".into(),
             console_model: "series-s".into(),
             title_args: String::new(),

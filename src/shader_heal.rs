@@ -1,5 +1,5 @@
 //! Shader Pipeline Auto-Healer (v15.2)
-//! Scans recent CGBJ logs for severe shader/pipeline compile or draw spikes (>= 80ms),
+//! Scans recent runner logs for severe shader/pipeline compile or draw spikes (>= 80ms),
 //! ranks top rogue hashes, and manages clean quarantine into `VICTORY_SKIP_PIPELINES`.
 
 use crate::config::Settings;

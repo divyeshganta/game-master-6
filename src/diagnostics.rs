@@ -940,7 +940,7 @@ pub fn parse_shader_census(lines: &[String]) -> ShaderCensus {
             format!("{translated}/{total} translated · {refused} refused ({})", reasons.join("; "))
         }
     } else {
-        "CGBJ translator active. Click RUN CENSUS to scan the local shader archive.".into()
+        "Shader translator active. Click RUN CENSUS to scan the local shader archive.".into()
     };
     ShaderCensus { translated, total, refused, summary }
 }

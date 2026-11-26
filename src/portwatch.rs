@@ -17,7 +17,7 @@ https://doesleonidaboot.com/race\n";
 
 /// Direct GitHub fallback list used if ALL community tracker sites shut down (Nov 26, 2026 standings).
 const FALLBACK_REPOS: [(&str, &str, f64, &str, &str); 10] = [
-    ("CGBJ", "DoubleGhosty/cool_fox", 91.5, "Playable (NV)", "CGBJ's VIctory/XCL build (DoubleGhosty mirror of codec-d/cool_fox)"),
+    ("CoolFox", "DoubleGhosty/cool_fox", 91.5, "Playable (NV)", "CoolFox VIctory/XCL build (DoubleGhosty mirror of codec-d/cool_fox)"),
     ("AvatarManz", "avatarmanz/VIctory-7900XTX", 83.1, "Playable (AMD)", "AvatarManz's 7900 XTX / AMD VIctory fork"),
     ("Belobug", "Belobug/VIctory-Belobug-AMD", 79.0, "Playable (AMD)", "Belobug's AMD-focused VIctory fork"),
     ("DexNom", "DexNom/VIctory", 78.0, "Playable (AMD)", "DexNom's AMD VIctory fork with ray-traced lighting"),

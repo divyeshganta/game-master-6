@@ -183,8 +183,8 @@ pub fn tuning_max_scroll(client_h: c_int) -> usize {
 /// Short badge for the active compatibility runner, used in status text.
 pub fn runner_badge(settings: &Settings) -> &'static str {
     let r = settings.resolved_runner().to_string_lossy().to_ascii_lowercase();
-    if r.contains("cgbj") {
-        "CGBJ"
+    if r.contains("baseline") {
+        "BASELINE"
     } else if r.contains("ztrx") {
         "ZTRX"
     } else if r.contains("diag") {
@@ -1756,9 +1756,9 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
     let rst_r = RECT::new(ab_r.left - 112, r.top + 20, ab_r.left - 8, r.top + 52);
     draw_button(hdc, rst_r, "V11 RESET", ctx.fonts.small_bold, ctx.hover == Target::ResetV11Perf, COL_CORAL, Target::ResetV11Perf, hits);
 
-    let active_env_count = crate::launcher::build_cgbj_env(ctx.settings).len();
+    let active_env_count = crate::launcher::build_runner_env(ctx.settings).len();
     let tuning_sub = format!(
-        "{active_env_count} verified CGBJ env flags active  ·  Click any section header to collapse/expand  ·  Scroll for more"
+        "{active_env_count} verified runner env flags active  ·  Click any section header to collapse/expand  ·  Scroll for more"
     );
     draw_text(hdc, &tuning_sub, RECT::new(r.left + 24, r.top + 46, rst_r.left - 12, r.top + 66), ctx.fonts.small, COL_CYAN, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     draw_line(hdc, r.left + 24, r.top + 74, r.right - 24, r.top + 74, COL_BORDER, 1);
@@ -2672,7 +2672,7 @@ unsafe fn draw_dock(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
 }
 
 /// Strictly matches a local discovered runner against a PortWatch Live Feed project.
-/// Prevents `runners\cgbj\victory.exe` from falsely matching upstream `Marvisak/VIctory`
+/// Prevents `runners\baseline\victory.exe` from falsely matching upstream `Marvisak/VIctory`
 /// via substring path matching on `victory`.
 fn matches_portwatch_project(
     r: &crate::runners::DiscoveredRunner,
@@ -2685,7 +2685,7 @@ fn matches_portwatch_project(
     if !repo_lc.is_empty() && rr == repo_lc {
         return true;
     }
-    if r.kind == crate::runners::RunnerKind::Cgbj && repo_lc == "marvisak/victory" {
+    if r.kind == crate::runners::RunnerKind::Baseline && repo_lc == "marvisak/victory" {
         return false;
     }
     let parent_folder = r
@@ -2712,12 +2712,12 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn cgbj_does_not_match_marvisak_victory() {
+    fn baseline_does_not_match_marvisak_victory() {
         let runners_root = PathBuf::from(r"C:\GM\runners");
-        let cgbj = DiscoveredRunner {
-            name: "cgbj".into(),
-            path: runners_root.join("cgbj").join("victory.exe"),
-            kind: RunnerKind::Cgbj,
+        let base_runner = DiscoveredRunner {
+            name: "baseline".into(),
+            path: runners_root.join("baseline").join("victory.exe"),
+            kind: RunnerKind::Baseline,
             size_label: "9.5 MB".into(),
             cache_label: "global".into(),
             has_backup: false,
@@ -2726,7 +2726,7 @@ mod tests {
             built_at: String::new(),
         };
         assert!(!matches_portwatch_project(
-            &cgbj,
+            &base_runner,
             &runners_root,
             "victory",
             "victory",

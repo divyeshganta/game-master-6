@@ -42,6 +42,18 @@ Live hardware telemetry bars (VRAM ceiling, System RAM, Windows Commit/Pagefile)
 
 ---
 
+## Hardware-Adaptive VRAM Tiers
+
+Game Master 6 probes your GPU's dedicated VRAM on first launch and applies a safe `BALANCED` baseline (all tiers keep `VICTORY_RELAY=2`, `VICTORY_CARD_STEPS=2`, and `VICTORY_LOG=warn`):
+
+| VRAM Tier | Console Default | `BALANCED` Resolution | `TEXTURE_ROOM_PERCENT` | `CARD_ROOM_FOR_TARGETS_MB` | `CARD_BUFFERS_MB` / `MIN_MB` |
+|---|---|---|---|---|---|
+| **8 GB** | `series-s` | `1280x720` | `85%` | `1536` | `512` / `4` |
+| **12 GB** | `series-s` (toggleable) | `1600x900` (`LOW`: `1280x720` @ `90%`) | `94%` | `2560` | `1024` / `4` |
+| **16 GB+** | `series-x` | `1920x1080` | `94%` | `2560` | `1024` / `4` |
+
+---
+
 ## Quick Start (Release ZIP)
 
 1. Download **`GameMaster6-v1.0-Release.zip`** from Releases (or the repository root) and extract it to a clean folder (e.g., `C:\Tools\GameMaster6\`).

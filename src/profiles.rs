@@ -1,5 +1,5 @@
 //! Portable Community Profile Export / Import (`.gmprofile`) for v15.2
-//! Allows sharing hardware-tuned CGBJ presets, Advanced flags, HUD mode, and keymaps.
+//! Allows sharing hardware-tuned presets, Advanced flags, HUD mode, and keymaps.
 
 use std::fs;
 use std::path::{Path, PathBuf};
