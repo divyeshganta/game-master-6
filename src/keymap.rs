@@ -1,4 +1,4 @@
-//! Universal-Standard PC Open-World Keybinding & Remapping Engine (v15.2)
+//! Universal-Standard PC Open-World Keybinding & Remapping Engine (v1.0)
 //! Supports Standard PC, FPS Standard, Left-Handed (IJKL), and Pad-Only layouts,
 //! with context-aware conflict detection and clean `Settings::keymap` serialization.
 

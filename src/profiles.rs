@@ -1,4 +1,4 @@
-//! Portable Community Profile Export / Import (`.gmprofile`) for v15.2
+//! Portable Community Profile Export / Import (`.gmprofile`) for v1.0
 //! Allows sharing hardware-tuned presets, Advanced flags, HUD mode, and keymaps.
 
 use std::fs;

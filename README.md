@@ -56,7 +56,7 @@ Game Master 6 probes your GPU's dedicated VRAM on first launch and applies a saf
 
 ## Quick Start (Release ZIP)
 
-1. Download **`GameMaster6-v1.0-Release.zip`** from Releases (or the repository root) and extract it to a clean folder (e.g., `C:\Tools\GameMaster6\`).
+1. Download **`GameMaster6-v1.0-Release.zip`** from the GitHub **Releases** tab and extract it to a clean folder (e.g., `C:\Tools\GameMaster6\`).
 2. Run **`GameMaster6.exe`**.
 3. On the **PLAY** tab, click **BROWSE GAME FOLDER...** to select your title directory and executable.
 4. Open **RUNNERS** to select or import your `victory.exe` runner.
@@ -73,8 +73,8 @@ Game Master 6 probes your GPU's dedicated VRAM on first launch and applies a saf
 
 ### Build & Test
 ```powershell
-git clone https://github.com/<your-username>/Game-Master-6.git
-cd Game-Master-6
+git clone https://github.com/divyeshganta/game-master-6.git
+cd game-master-6
 cargo test
 cargo build --release
 ```

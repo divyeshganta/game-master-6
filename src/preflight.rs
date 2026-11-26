@@ -1,4 +1,4 @@
-//! Universal Pre-Flight System Readiness Scorer (v15.2)
+//! Universal Pre-Flight System Readiness Scorer (v1.0)
 //! Evaluates GPU VRAM tier, active commit/pagefile mount status, TDR safety,
 //! display VRAM overhead, shader cache readiness, and CPU capabilities.
 

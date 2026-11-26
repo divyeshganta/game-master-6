@@ -642,7 +642,7 @@ pub fn export_report(s: &Settings, sys: &SystemInfo, audit: &AssetAudit, data_la
     out.push_str(&format!("GPU Timing        : {}\n", if s.gpu_timing { "ON" } else { "OFF" }));
     out.push_str(&format!("Frame Capture     : {}\n", if s.capture { "ON" } else { "OFF" }));
     out.push_str(&format!("Shader Loop Limit : {}\n", if s.shader_loop_limit.is_empty() { "AUTO" } else { &s.shader_loop_limit }));
-    out.push_str(&format!("v11 Perf Switches : async_submit={} queue2={} indirect_window={} texture_no_wait={} merge_passes={}\n", s.async_submit, s.queue2, s.indirect_window, s.texture_no_wait, s.merge_passes));
+    out.push_str(&format!("Pipeline Perf     : async_submit={} queue2={} indirect_window={} texture_no_wait={} merge_passes={}\n", s.async_submit, s.queue2, s.indirect_window, s.texture_no_wait, s.merge_passes));
     out.push_str(&format!("Title Args        : {}\n\n", if s.title_args.is_empty() { "(none)" } else { &s.title_args }));
 
     out.push_str(&format!("[ASSET AUDIT: {}/{} CORE CHECKS PASSED]\n", audit.passed, audit.total));
@@ -813,7 +813,7 @@ pub fn export_ai_debug_bundle(
         if s.shader_loop_limit.is_empty() { "AUTO" } else { &s.shader_loop_limit },
         if s.skip_pipelines.is_empty() { "none" } else { &s.skip_pipelines },
         s.card_buffers_label(), s.card_rehash_runs, s.join_copies, s.timer_1ms));
-    out.push_str(&format!("- v11 perf: async_submit=`{}` | queue2=`{}` | indirect_window=`{}` | texture_no_wait=`{}` | merge_passes=`{}`\n\n",
+    out.push_str(&format!("- perf: async_submit=`{}` | queue2=`{}` | indirect_window=`{}` | texture_no_wait=`{}` | merge_passes=`{}`\n\n",
         s.async_submit, s.queue2, s.indirect_window, s.texture_no_wait, s.merge_passes));
 
     out.push_str(&format!("## Preflight Audit ({}/{})\n", audit.passed, audit.total));

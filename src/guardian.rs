@@ -1,4 +1,4 @@
-//! Automated Crash-Recovery & Last-Known-Good Guardian (v15.2)
+//! Automated Crash-Recovery & Last-Known-Good Guardian (v1.0)
 //! Snapshots proven-stable settings after >=90s of clean runtime, diagnoses early crashes
 //! from runner logs, and enables 1-click Safe Boot rollback without losing user paths.
 

@@ -759,7 +759,7 @@ pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(R
     );
     draw_text(
         hdc,
-        "v15.2",
+        "v1.0",
         RECT::new(20, h - 40, 104, h - 20),
         ctx.fonts.small_bold,
         COL_DIM,
@@ -791,7 +791,7 @@ pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(R
     } else {
         "CACHE NOT PREPARED".into()
     };
-    let header_sub = format!("v15.2 · {phase_txt}");
+    let header_sub = format!("v1.0 · {phase_txt}");
     draw_text(
         hdc,
         &header_sub,
@@ -915,7 +915,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     let tx = hero_r.left + 28;
     let tw = (hero_r.width() - 260).max(280);
     let gpu_eyebrow = if ctx.sys.gpu_name.is_empty() {
-        format!("DETECTING GPU  ·  {}  ·  v15.2", ctx.settings.active_runner_kind().badge())
+        format!("DETECTING GPU  ·  {}  ·  v1.0", ctx.settings.active_runner_kind().badge())
     } else if ctx.sys.vram_gb > 0.5 {
         format!(
             "{}  ·  {:.0} GB VRAM  ·  {}",
@@ -1126,15 +1126,21 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         draw_text(hdc, &lbl, RECT::new(prep_r.left + 12, prep_r.top + 8, prep_r.right - 12, prep_r.bottom - 22), ctx.fonts.body_bold, COL_AMBER, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     } else {
         let prep_lbl = if cache_ready {
-            format!("✓  CACHE READY ({})", ctx.audit.shader_cache_label)
+            let short_cache = ctx
+                .audit
+                .shader_cache_label
+                .split(" (")
+                .next()
+                .unwrap_or(&ctx.audit.shader_cache_label);
+            format!("CACHE READY · {short_cache}")
         } else {
             "PREPARE CACHE".into()
         };
         draw_text(
             hdc,
             &prep_lbl,
-            prep_r,
-            ctx.fonts.title,
+            RECT::new(prep_r.left + 10, prep_r.top, prep_r.right - 10, prep_r.bottom),
+            ctx.fonts.heading,
             if cache_ready { COL_EMERALD } else { COL_CYAN },
             DT_CENTER | DT_VCENTER | DT_SINGLELINE,
         );
@@ -1742,7 +1748,7 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
     rounded_rect(hdc, r, COL_PANEL, COL_BORDER, 16);
     draw_text(hdc, "ADVANCED / ENGINEERING", RECT::new(r.left + 24, r.top + 16, r.left + 380, r.top + 46), ctx.fonts.heading, COL_WHITE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    // Top-right header toolbar: V11 RESET | A/B TEST | HIGH | BALANCED | LOW
+    // Top-right header toolbar: RESET DEFAULTS | A/B TEST | HIGH | BALANCED | LOW
     let p3 = RECT::new(r.right - 104, r.top + 20, r.right - 20, r.top + 52);
     draw_button(hdc, p3, "LOW", ctx.fonts.small_bold, ctx.hover == Target::ApplyPreset(2), COL_AMBER, Target::ApplyPreset(2), hits);
     let p2 = RECT::new(p3.left - 118, r.top + 20, p3.left - 8, r.top + 52);
@@ -1753,8 +1759,8 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
     let ab_exp = crate::ab_bench::AbExperiment::from_id(&ctx.settings.ab_experiment);
     let ab_col = if ab_exp == crate::ab_bench::AbExperiment::Off { COL_MUTED } else { COL_EMERALD };
     draw_button(hdc, ab_r, ab_exp.label(), ctx.fonts.small_bold, ctx.hover == Target::CycleAbExperiment, ab_col, Target::CycleAbExperiment, hits);
-    let rst_r = RECT::new(ab_r.left - 112, r.top + 20, ab_r.left - 8, r.top + 52);
-    draw_button(hdc, rst_r, "V11 RESET", ctx.fonts.small_bold, ctx.hover == Target::ResetV11Perf, COL_CORAL, Target::ResetV11Perf, hits);
+    let rst_r = RECT::new(ab_r.left - 142, r.top + 20, ab_r.left - 8, r.top + 52);
+    draw_button(hdc, rst_r, "RESET DEFAULTS", ctx.fonts.small_bold, ctx.hover == Target::ResetV11Perf, COL_CORAL, Target::ResetV11Perf, hits);
 
     let active_env_count = crate::launcher::build_runner_env(ctx.settings).len();
     let tuning_sub = format!(

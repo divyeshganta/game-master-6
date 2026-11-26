@@ -1,4 +1,4 @@
-//! Shader Pipeline Auto-Healer (v15.2)
+//! Shader Pipeline Auto-Healer (v1.0)
 //! Scans recent runner logs for severe shader/pipeline compile or draw spikes (>= 80ms),
 //! ranks top rogue hashes, and manages clean quarantine into `VICTORY_SKIP_PIPELINES`.
 

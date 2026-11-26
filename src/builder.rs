@@ -214,7 +214,7 @@ pub static D3D12SDKPath: &[u8; 9] = &[0x2E, 0x5C, 0x44, 0x33, 0x44, 0x31, 0x32, 
         .args([
             "/C",
             "start",
-            "Game Master v15.2 Safe Auto-Builder",
+            "Game Master 6 v1.0 Safe Auto-Builder",
             "powershell",
             "-NoProfile",
             "-ExecutionPolicy",

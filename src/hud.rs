@@ -1,4 +1,4 @@
-//! Universal-Standard Performance Overlay (v15.2 — RTSS / MangoHud / Steam Standard)
+//! Universal-Standard Performance Overlay (v1.0 — RTSS / MangoHud / Steam Standard)
 //! Supports 3 density modes:
 //!   0 = COMPACT   (380x36 sleek horizontal telemetry strip)
 //!   1 = STANDARD  (316x118 MangoHud/RTSS card: FPS, 1% Low, [WORLD]/[MENU], Frame/GPU ms, RAM/Commit, live 60-sample frametime sparkline)
