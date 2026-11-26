@@ -1,21 +1,56 @@
+<div align="center">
+
+<img src="assets/banner.png" alt="Game Master 6 Banner" width="100%" />
+
 # Game Master 6
 
-A lightweight, zero-dependency Windows Win32/GDI GUI frontend, hardware-adaptive preset manager, and live RAM/commit monitor for `victory.exe` compatibility runners.
+**A lightweight, zero-dependency Windows GUI launcher, hardware-adaptive VRAM preset manager, and live system telemetry frontend for `victory.exe` compatibility runners.**
 
-> **Disclaimer:** Game Master 6 ships **without** any runners, binaries, or game files. Users must supply their own title files and compatibility runner executable.
+[![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-00e5ff?style=for-the-badge&logo=windows)](https://github.com)
+[![Built with](https://img.shields.io/badge/Built%20with-Rust%20%2B%20Win32%20GDI-ff2e93?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
+[![License](https://img.shields.io/badge/License-GPL--3.0-22c55e?style=for-the-badge)](LICENSE)
+[![Latest Release](https://img.shields.io/badge/Release-v1.0-f59e0b?style=for-the-badge)](GameMaster6-v1.0-Release.zip)
+
+</div>
+
+> **Disclaimer:** Game Master 6 is a pure frontend and configuration manager. It ships **without** any compatibility runners, third-party DLLs, or game files—users must supply their own title directory and `victory.exe` runner.
+
+---
+
+## Preview
+
+### Play Dashboard
+Live hardware telemetry bars (VRAM ceiling, System RAM, Windows Commit/Pagefile), itemized Pre-Flight readiness score, dynamic process-aware System Tip, and last-session activity feed:
+
+<img src="assets/screenshot-play.png" alt="Game Master 6 Play Dashboard" width="100%" />
+
+### Advanced Engineering Tab
+5 collapsible sections with standardized status badges, per-knob descriptions, `VICTORY_TEXTURE_ROOM_PERCENT` selector, and clean vertical scrolling:
+
+<img src="assets/screenshot-advanced.png" alt="Game Master 6 Advanced Engineering Tab" width="100%" />
+
+---
 
 ## Features
-- **Hardware-Adaptive Presets (`LOW` / `BALANCED` / `HIGH`)**: Automatically detects GPU VRAM tier (8 GB, 12 GB, 16 GB, 24 GB+) and CPU core count on first launch to configure safe `VICTORY_*` environment variables.
-- **Live Hardware & Pre-Flight Breakdown**: Real-time progress bars for GPU VRAM ceiling (`VICTORY_TEXTURE_ROOM_PERCENT`), System RAM, and Windows Commit/Pagefile, plus an itemized Pre-Flight readiness score.
-- **Dynamic Process-Aware System Tip**: Inspects live free RAM/commit, top memory-consuming user apps, multi-monitor VRAM overhead, AC/battery power state, and shader cache status.
-- **5-Section Engineering Panel**: Organized toggles for System & Host Scheduling, VRAM/Textures/Buffers, GPU Pipeline & Parallelism, Display/Visuals/HUD, and Diagnostics & Debug.
-- **Input, Keybinds & Session Telemetry**: Automatic FPS curve, runner head-to-head scorecard, session benchmark leaderboard, and shader translator census.
 
-## Using the Release ZIP
-1. Extract `GameMaster6-v1.0-Release.zip` to a clean folder (e.g., `C:\Tools\GameMaster6\`).
-2. Run `GameMaster6.exe`.
-3. On the **PLAY** tab, select your title folder/executable and import or select your `victory.exe` runner on the **RUNNERS** tab.
-4. Choose a preset (`LOW`, `BALANCED`, or `HIGH`) and `SERIES-S` / `SERIES-X` console mode, run **PREPARE CACHE** if supported, and click **LAUNCH TITLE**.
+- **Hardware-Adaptive Presets (`LOW` / `BALANCED` / `HIGH`)**: Auto-detects GPU VRAM tier (`8 GB`, `12 GB`, `16 GB`, `24 GB+`) and CPU core count on first launch to configure safe `VICTORY_*` defaults.
+- **1-Click Console Profile Toggle**: Switch between `SERIES-S` and `SERIES-X` directly from the Play tab Preset card for quick A/B testing.
+- **Dynamic Process-Aware System Tip**: Monitors free RAM, Windows commit, top memory-consuming user apps, multi-monitor VRAM overhead, AC/battery power, and shader cache status.
+- **Pre-Flight Readiness & Crash Guardian**: Scores system readiness (`0–100`), classifies known NVIDIA `wave32` runner notes separately from errors, and provides 1-click Last-Known-Good rollback.
+- **Input, Keybinds & Session Telemetry**: Automatic FPS sparkline, runner head-to-head scorecard, log-synced session benchmark leaderboard, and shader translator census.
+- **Zero External Dependencies**: Written in pure Rust (`std` + Win32/GDI/WinINet FFI) with sub-second incremental builds.
+
+---
+
+## Quick Start (Release ZIP)
+
+1. Download **`GameMaster6-v1.0-Release.zip`** from Releases (or the repository root) and extract it to a clean folder (e.g., `C:\Tools\GameMaster6\`).
+2. Run **`GameMaster6.exe`**.
+3. On the **PLAY** tab, click **BROWSE GAME FOLDER...** to select your title directory and executable.
+4. Open **RUNNERS** to select or import your `victory.exe` runner.
+5. Choose **`LOW`**, **`BALANCED`**, or **`HIGH`** and **`SERIES-S` / `SERIES-X`**, click **PREPARE CACHE** once if supported, and press **LAUNCH TITLE**.
+
+---
 
 ## Building from Source
 
@@ -33,6 +68,8 @@ cargo build --release
 ```
 
 The compiled binary is output to `target\release\GameMaster6.exe`.
+
+---
 
 ## Project Structure
 
@@ -61,3 +98,9 @@ src/
 ├── shader_heal.rs   # Shader skip-list / healing helpers
 └── vram_guard.rs    # Background VRAM-heavy process detector
 ```
+
+---
+
+## Contributing
+
+Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for the fork -> branch -> `cargo test` -> Pull Request workflow and repository hygiene rules.

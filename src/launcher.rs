@@ -347,7 +347,7 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
             cmd.env("VICTORY_SHADER_LOOP_LIMIT", s.shader_loop_limit.trim());
         }
         cmd.env("VICTORY_WINDOW_TITLE", "Game Master 6 - Title")
-            .env("VICTORY_WINDOW_ICON", Settings::app_dir().join("logo.ico"));
+            .env("VICTORY_WINDOW_ICON", Settings::resolve_asset("logo.ico"));
     } else {
         // Universal adapter for custom compatibility runners and forks
         cmd.current_dir(&s.game_dir).arg(&s.exe);

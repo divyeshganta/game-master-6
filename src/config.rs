@@ -190,10 +190,27 @@ impl Default for Settings {
 impl Settings {
     pub fn app_dir() -> PathBuf {
         std::env::current_exe()
-            .unwrap_or_else(|_| PathBuf::from("GameMaster.exe"))
+            .unwrap_or_else(|_| PathBuf::from("GameMaster6.exe"))
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf()
+    }
+
+    /// Resolves a runtime asset (e.g. `logo.ico`, `logo.bmp`, fonts) beside the exe or in `assets/`.
+    pub fn resolve_asset(name: &str) -> PathBuf {
+        let beside = Self::app_dir().join(name);
+        if beside.is_file() {
+            return beside;
+        }
+        let in_assets = Self::app_dir().join("assets").join(name);
+        if in_assets.is_file() {
+            return in_assets;
+        }
+        let cwd_assets = PathBuf::from("assets").join(name);
+        if cwd_assets.is_file() {
+            return cwd_assets;
+        }
+        beside
     }
 
     pub fn path() -> PathBuf {

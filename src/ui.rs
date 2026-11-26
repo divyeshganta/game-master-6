@@ -1320,7 +1320,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         }
         Target::CreateDesktopShortcut => {
             let exe = std::env::current_exe().unwrap_or_else(|_| Settings::app_dir().join("Game Master.exe"));
-            let ico = Settings::app_dir().join("logo.ico");
+            let ico = Settings::resolve_asset("logo.ico");
             match create_desktop_shortcut(&exe, &ico) {
                 Ok(lnk) => {
                     st.set_toast("Desktop shortcut created!");
@@ -1756,7 +1756,7 @@ unsafe fn on_timer(hwnd: HWND) {
 
         let poll_res = if let Some(ref mut sess) = st.session {
             if sess.kind == launcher::ProcessKind::Game && (!sess.window_branded || st.anim_tick % 10 == 0) {
-                let ico = Settings::app_dir().join("logo.ico");
+                let ico = Settings::resolve_asset("logo.ico");
                 if brand_runner_window(sess.child.id(), "Game Master 6 - Title", &ico, true) {
                     sess.window_branded = true;
                 }
@@ -1964,7 +1964,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
             let fonts = Fonts::load(&dir);
 
             // Load multi-size icon via native LoadImageW
-            let ico_path = wide(&dir.join("logo.ico").to_string_lossy());
+            let ico_path = wide(&Settings::resolve_asset("logo.ico").to_string_lossy());
             let big_ico = LoadImageW(std::ptr::null_mut(), ico_path.as_ptr(), IMAGE_ICON, 48, 48, LR_LOADFROMFILE);
             let sm_ico = LoadImageW(std::ptr::null_mut(), ico_path.as_ptr(), IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
             if !big_ico.is_null() {
@@ -2094,7 +2094,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
 
             let st = state(hwnd);
             if st.logo.is_none() {
-                st.logo = LogoSurface::load(hdc, &Settings::app_dir().join("logo.bmp"));
+                st.logo = LogoSurface::load(hdc, &Settings::resolve_asset("logo.bmp"));
             }
 
             let mem = CreateCompatibleDC(hdc);
@@ -2513,7 +2513,7 @@ unsafe fn dump_ui_tabs(out_dir: &std::path::Path) {
         return;
     }
     let old = SelectObject(mem, bmp);
-    let logo = LogoSurface::load(mem, &Settings::app_dir().join("logo.bmp"));
+    let logo = LogoSurface::load(mem, &Settings::resolve_asset("logo.bmp"));
     let portwatch = PortWatchSnapshot::default();
     let mods = saves::list_mods(8);
     let slow_shaders = Vec::new();
