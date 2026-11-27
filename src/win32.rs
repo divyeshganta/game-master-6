@@ -1610,6 +1610,7 @@ pub unsafe fn make_runner_window_borderless_fullscreen(pid: u32) -> bool {
     const SWP_FRAMECHANGED: UINT = 0x0020;
     const SWP_NOOWNERZORDER: UINT = 0x0200;
     const SWP_SHOWWINDOW: UINT = 0x0040;
+    const SWP_ASYNCWINDOWPOS: UINT = 0x4000;
 
     let style = GetWindowLongPtrW(ctx.found, GWL_STYLE);
     let new_style = (style & !(0x00CF_0000_isize)) | (WS_POPUP as isize) | (WS_VISIBLE as isize);
@@ -1628,7 +1629,7 @@ pub unsafe fn make_runner_window_borderless_fullscreen(pid: u32) -> bool {
         0,
         w,
         h,
-        SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_SHOWWINDOW,
+        SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_SHOWWINDOW | SWP_ASYNCWINDOWPOS,
     );
     let _ = SetForegroundWindow(ctx.found);
     true

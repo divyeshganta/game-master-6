@@ -744,6 +744,31 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
     })
 }
 
+pub fn poll_status_only(session: &mut ActiveSession) -> PollUpdate {
+    let mut finished = None;
+    if let Ok(Some(status)) = session.child.try_wait() {
+        session.release_session_hooks();
+        let code = status.code();
+        let elapsed = session.started_at.elapsed().as_secs();
+        let diagnosis = if code != Some(0) {
+            Some(diagnose_failure(code, &session.log_path))
+        } else {
+            None
+        };
+        finished = Some(FinishSummary {
+            kind: session.kind,
+            exit_code: code,
+            elapsed_secs: elapsed,
+            diagnosis,
+            log_path: session.log_path.clone(),
+        });
+    }
+    PollUpdate {
+        new_lines: Vec::new(),
+        finished,
+    }
+}
+
 pub fn poll(session: &mut ActiveSession) -> PollUpdate {
     let mut new_lines = Vec::new();
     if let Ok(mut f) = File::open(&session.log_path) {
@@ -751,7 +776,7 @@ pub fn poll(session: &mut ActiveSession) -> PollUpdate {
         if len > session.log_offset {
             if f.seek(SeekFrom::Start(session.log_offset)).is_ok() {
                 let mut buf = Vec::new();
-                if f.read_to_end(&mut buf).is_ok() {
+                if f.take(65_536).read_to_end(&mut buf).is_ok() {
                     session.log_offset += buf.len() as u64;
                     let text = String::from_utf8_lossy(&buf);
                     for raw_line in text.lines() {
@@ -1083,15 +1108,15 @@ pub fn resolve_victory_launch_env(
         set("VICTORY_SYNC_FINE", "1".into());
         set("VICTORY_HEAP_SYNC_AT_SUBMIT", "1".into());
 
-        // Texture & pipeline defaults
+        // Texture & pipeline defaults — proven anti-whiteout streaming + parallel list translation
         set("VICTORY_TEXTURE_POOL", "1".into());
         set("VICTORY_RIPE_BLOCKS", "0".into());
         set("VICTORY_TEXTURE_NO_WAIT", "1".into());
-        set("VICTORY_TEXTURE_CATCHUP", "0".into());
+        set("VICTORY_TEXTURE_CATCHUP", "1".into());
         set("VICTORY_TEXTURE_STAGE_MS", "16".into());
         set("VICTORY_LEVELS_ON_DEMAND", "0".into());
         set("VICTORY_PRELUDE_UPLOADS", "1".into());
-        set("VICTORY_SHOW_NEW_LATER", "1".into());
+        set("VICTORY_SHOW_NEW_LATER", "0".into());
         set("VICTORY_POOL_SMALL", "0".into());
         set("VICTORY_TABLED_REREAD", "1".into());
         set("VICTORY_QUEUE_HOST_TEXTURES", "0".into());
@@ -1124,7 +1149,7 @@ pub fn resolve_victory_launch_env(
         set("VICTORY_FRAME_INTERVAL_US", "1000".into());
 
         let tex_room = if s.texture_room_percent.trim().is_empty() {
-            if sys.vram_gb <= 8.5 { "72" } else if sys.vram_gb <= 13.5 { "75" } else { "80" }
+            if sys.vram_gb <= 8.5 { "72" } else if sys.vram_gb <= 13.5 { "85" } else { "86" }
         } else {
             s.texture_room_percent.trim()
         };
@@ -1133,6 +1158,7 @@ pub fn resolve_victory_launch_env(
         // Native FULLSCREEN (NO BORDER) = ON when Borderless Fullscreen is selected
         set("VICTORY_FULLSCREEN", if s.borderless { "1" } else { "0" }.into());
         set("VICTORY_BORDERLESS", if s.borderless { "1" } else { "0" }.into());
+        set("VICTORY_MOUSE_CAPTURE", if s.mouse_capture { "1" } else { "0" }.into());
         set("VICTORY_LOG", s.effective_victory_log().to_string());
 
         // DLSS & Frame Gen from Settings
@@ -1244,6 +1270,10 @@ mod tests {
         assert_eq!(get("VICTORY_EARLY_DEPTH"), Some("1"));
         assert_eq!(get("VICTORY_WC_NO_BACK"), Some("1"));
         assert_eq!(get("VICTORY_SOFT_VIEWS"), Some("copies"));
+        assert_eq!(get("VICTORY_SHOW_NEW_LATER"), Some("0"));
+        assert_eq!(get("VICTORY_TEXTURE_CATCHUP"), Some("1"));
+        assert_eq!(get("VICTORY_THIN"), Some("1"));
+        assert_eq!(get("VICTORY_MOUSE_CAPTURE"), Some("0"));
         if let Some(vault) = crate::saves::shared_save_vault_dir() {
             assert_eq!(get("VICTORY_DATA_DIR"), Some(vault.to_string_lossy().as_ref()));
         }

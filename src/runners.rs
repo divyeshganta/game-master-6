@@ -838,6 +838,9 @@ pub fn sync_from_victory_settings(s: &mut Settings, runner_path: &Path) -> bool 
     if let Some(fs_val) = get("VICTORY_FULLSCREEN") {
         s.borderless = fs_val.trim() == "1";
     }
+    if let Some(mc_val) = get("VICTORY_MOUSE_CAPTURE") {
+        s.mouse_capture = mc_val.trim() == "1";
+    }
     true
 }
 
@@ -887,6 +890,7 @@ pub fn sync_to_victory_settings(s: &Settings, runner_path: &Path) -> Result<(), 
         set_kv("VICTORY_OUTPUT", s.display_mode.clone());
     }
     set_kv("VICTORY_FULLSCREEN", if s.borderless { "1" } else { "0" }.into());
+    set_kv("VICTORY_MOUSE_CAPTURE", if s.mouse_capture { "1" } else { "0" }.into());
     set_kv("VICTORY_DLSS", if dlss_active { "1" } else { "0" }.into());
     set_kv("VICTORY_DLSS_MODE", if dlss_active { dlss_m.clone() } else { "off".into() });
     set_kv("VICTORY_MENU_DLSS", if dlss_active { dlss_m } else { "off".into() });

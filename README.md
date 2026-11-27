@@ -2,14 +2,14 @@
 
 <img src="assets/banner.png" alt="Game Master 6 Banner" width="100%" />
 
-# Game Master 6 (v1.5.0)
+# Game Master 6 (v1.5.1)
 
 **A lightweight, zero-dependency Windows GUI launcher, hardware-adaptive VRAM preset manager, and live system telemetry frontend for `victory.exe` compatibility runners.**
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-00e5ff?style=for-the-badge&logo=windows)](https://github.com)
 [![Built with](https://img.shields.io/badge/Built%20with-Rust%20%2B%20Win32%20GDI-ff2e93?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-GPL--3.0-22c55e?style=for-the-badge)](LICENSE)
-[![Latest Release](https://img.shields.io/badge/Release-v1.5.0-f59e0b?style=for-the-badge)](GameMaster6-v1.5.0-Release.zip)
+[![Latest Release](https://img.shields.io/badge/Release-v1.5.1-f59e0b?style=for-the-badge)](GameMaster6-v1.5.1-Release.zip)
 
 </div>
 
@@ -17,9 +17,17 @@
 
 ---
 
+## What's New in v1.5.1
+
+- **Zero "Not Responding" UI Freezes**: Suspended all background hardware, VRAM, process, PortWatch, shader census, and log polling while `victory.exe` is running (keeping only a lightweight 500 ms `try_wait()` check), switched cross-process borderless fullscreen `SetWindowPos` to `SWP_ASYNCWINDOWPOS`, and removed repeated cross-process `WM_SETTEXT` branding calls.
+- **Clean XInput Controller Handoff**: Paused all launcher XInput polling and rumble tests while `victory.exe` is running so the game runner has exclusive controller access, and added an in-tab note clarifying that rumble strength/haptics are controlled by the game's Controls menu and runner HLE.
+- **Anti-Whiteout Texture Streaming & Smoother DLSS Frame Pacing**: Wired live-benchmarked `VICTORY_SHOW_NEW_LATER=0`, `VICTORY_TEXTURE_CATCHUP=1`, `VICTORY_THIN=1`, `VICTORY_TEXTURE_ROOM_PERCENT=85` (12 GB tier, 0 VRAM errors) and steady `2x` DLSS Frame Generation across presets while keeping safe 6–8 GB ceilings (`70–74%`).
+- **Mouse Capture / Hide Cursor Toggle**: Added `MOUSE CAPTURE / HIDE CURSOR` (`VICTORY_MOUSE_CAPTURE=1`) in Settings to keep the Windows cursor hidden and clipped during gameplay.
+- **PortWatch Fallback Cleanup**: Removed dead/deleted repositories (`Belobug` and `AvatarManz`) from `FALLBACK_REPOS`, keeping `trustno1-coder/VIctory-NVIDIA` (#1 NVIDIA) and `DexNom/VIctory` (#1 AMD) at the top.
+
 ## What's New in v1.5.0
 
-- **1-Click Triforce Auto-Setup**: Fresh installs lacking a runner, NVIDIA Streamline DLSS DLLs, or shader cache get a 1-click **AUTO-SETUP (RUNNER + DLSS + SHADERS)** flow on Play that auto-selects the best runner for your GPU (`VIctory-NVIDIA` for RTX; `Belobug` for AMD), fetches NVIDIA Streamline DLLs, warms shaders, and writes optimal GPU-tier `victory-settings.txt` (including safe 6 GB RTX 4050 defaults).
+- **1-Click Triforce Auto-Setup**: Fresh installs lacking a runner, NVIDIA Streamline DLSS DLLs, or shader cache get a 1-click **AUTO-SETUP (RUNNER + DLSS + SHADERS)** flow on Play that auto-selects the best runner for your GPU (`VIctory-NVIDIA` for RTX; `DexNom` for AMD), fetches NVIDIA Streamline DLLs, warms shaders, and writes optimal GPU-tier `victory-settings.txt` (including safe 6 GB RTX 4050 defaults).
 - **Live-Verified DLSS / MFG / Borderless / Uncapped FPS**: Streamline runners (`VIctory-NVIDIA`) automatically receive `VICTORY_ASYNC_SUBMIT=1` (keeping DLSS Frame Generation ON), `VICTORY_NATIVE_1440P=1` + `VICTORY_MENU_RES=1440` on <=16 GB GPUs, uncapped FPS (`VICTORY_MENU_FPS=1000`), native `VICTORY_FULLSCREEN=1` + 90s Win32 borderless fallback watcher, and all 4 fast F1 speed switches (`VICTORY_EARLY_DEPTH=1`, `VICTORY_WC_NO_BACK=1`, `VICTORY_SOFT_VIEWS=copies`, `VICTORY_LEAVE_OUT`) without VRAM-hogging overrides.
 - **Zero Zombie Processes**: Every runner process tree is bound to a Windows Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`), backed by automatic pre-launch stray cleanup, a 4-second post-window-close headless watchdog, and a red **STOP GAME** button.
 - **UI, Parser & Telemetry Polish**: Added **SECTION 0 · NVIDIA STREAMLINE & IN-GAME MENU** in Advanced (with `COOL_FOX` badges for fork-specific toggles), renamed `RESET DEFAULTS`, fixed `APPLY FIX` button clipping and Streamline-aware Auto-Doctor advice, fixed `GPU TIMING` log matching (excluding `timer_1ms`), added horizontal log line wrapping and `victory-nvidia-*.log` support, fixed shader census `SCANNING...` lockup, fixed Tools column truncation, updated `Kelvaroq` to `stellarr-studio/kelvaroq`, and enabled live tracker sync (`OFFLINE: OFF`) by default.

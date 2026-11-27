@@ -146,6 +146,7 @@ pub enum Target {
     ToggleMouseAim,
     CycleMouseSens,
     ToggleMouseLock,
+    ToggleMouseCapture,
     RunShaderCensus,
     ToggleAsyncSubmit,
     ToggleQueue2,
@@ -995,6 +996,7 @@ fn hover_hint_text(target: Target) -> Option<&'static str> {
         Target::CycleFrameGen => Some("Set DLSS & Frame Gen here before launching — toggling FG mid-game in F1 can spike VRAM."),
         Target::CycleDisplayMode => Some("DISPLAY: Cycles output resolution (1280x720 / 1920x1080 / 2560x1440 / 4K) and syncs victory-settings.txt."),
         Target::ToggleBorderless => Some("BORDERLESS: Toggles borderless fullscreen vs windowed mode."),
+        Target::ToggleMouseCapture => Some("MOUSE CAPTURE: Hides & captures the Windows cursor in-game (VICTORY_MOUSE_CAPTURE=1)."),
         Target::ToggleConsoleQuick => Some("CONSOLE PROFILE: Switches Series S (720p internal, faster) vs Series X (1440p internal, sharper)."),
         Target::CycleHomeRunner => Some("PRIMARY RUNNER: Cycles your active #1 runner. Manage/update/build runners in the Runners tab."),
         Target::PinBaseline => Some("PIN BASELINE: Locks your current runner & settings as a safe reference point for ROLLBACK."),
@@ -2172,10 +2174,11 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
     }
 
     // ── Section 1: SYSTEM & HOST SCHEDULING (2-col grid) ────────────────────
-    let s1_items: [(&str, &str, bool, bool, &str, Target); 6] = [
+    let s1_items: [(&str, &str, bool, bool, &str, Target); 7] = [
         ("FORCE DEDICATED GPU (HIGH PERF)", &dgpu_desc, ctx.settings.prefer_dgpu, false, if ctx.settings.prefer_dgpu { "ON" } else { "OFF" }, Target::TogglePreferDgpu),
         ("HIGH PRIORITY & NO THROTTLING", "Boosts active runner to High priority and disables EcoQoS.", ctx.settings.high_priority, false, if ctx.settings.high_priority { "ON" } else { "OFF" }, Target::ToggleHighPriority),
-        ("ZERO-OVERHEAD PLAY MODE", "Auto-minimizes Game Master & pauses UI polling while playing.", ctx.settings.zero_overhead, false, if ctx.settings.zero_overhead { "ON" } else { "OFF" }, Target::ToggleZeroOverhead),
+        ("ZERO-OVERHEAD PLAY MODE", "Auto-minimizes Game Master & suspends all background polling while playing.", ctx.settings.zero_overhead, false, if ctx.settings.zero_overhead { "ON" } else { "OFF" }, Target::ToggleZeroOverhead),
+        ("MOUSE CAPTURE / HIDE CURSOR", "VICTORY_MOUSE_CAPTURE=1 (hides & clips Windows cursor inside game).", ctx.settings.mouse_capture, false, if ctx.settings.mouse_capture { "ON" } else { "OFF" }, Target::ToggleMouseCapture),
         ("ISOLATED PER-RUNNER CACHE", "Per-fork VICTORY_CACHE_DIR (keep OFF to share global cache).", ctx.settings.isolated_cache, false, if ctx.settings.isolated_cache { "ON" } else { "OFF" }, Target::ToggleIsolatedCache),
         ("FAST CORES", "Pin submit & relay threads to performance P-cores.", ctx.settings.fast_cores, false, if ctx.settings.fast_cores { "ON" } else { "OFF" }, Target::ToggleFastCores),
         ("1MS TIMER", "High-resolution Windows 1ms multimedia frame pacing.", ctx.settings.timer_1ms, false, if ctx.settings.timer_1ms { "ON" } else { "OFF" }, Target::ToggleTimer1ms),
@@ -2649,9 +2652,9 @@ unsafe fn draw_bench_input(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Ve
     };
     draw_text(hdc, &dev_title, RECT::new(pad_card.left + 12, pad_card.top + 5, pad_card.right - 124, pad_card.top + 25), ctx.fonts.body_bold, COL_WHITE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     let dev_sub = if pad_active {
-        format!("Buttons bitmask: 0x{:04X} · Driving GameInput Pad #1 (click MODE to force KBM)", primary_pad.buttons)
+        format!("Buttons: 0x{:04X} · Rumble strength/haptics controlled by game Controls menu & runner HLE (paused in launcher while playing)", primary_pad.buttons)
     } else {
-        "WASD Move · IJKL Camera · Click any action below to customize keybind".into()
+        "WASD Move · IJKL Camera · Rumble/haptics controlled by game Controls menu & runner HLE".into()
     };
     draw_text(hdc, &dev_sub, RECT::new(pad_card.left + 12, pad_card.top + 26, pad_card.right - 124, pad_card.bottom - 5), ctx.fonts.small, if pad_active { COL_EMERALD } else { COL_MUTED }, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     if primary_pad.connected {

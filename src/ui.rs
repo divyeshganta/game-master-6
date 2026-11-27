@@ -125,6 +125,9 @@ impl AppState {
     }
 
     fn refresh_diagnostics(&mut self, rescan_size: bool) {
+        if self.session.is_some() {
+            return;
+        }
         let (prev_gpu, prev_drv, prev_vram) = (self.sys.gpu_name.clone(), self.sys.gpu_driver.clone(), self.sys.vram_gb);
         self.sys = SystemInfo::collect(&self.settings.game_dir);
         self.sys.gpu_name = prev_gpu;
@@ -355,9 +358,9 @@ unsafe fn handle_launch_or_stop(hwnd: HWND) {
                     hud.update(&format!("Game Master 6 · {rname} · STARTING..."), rgb(0, 240, 255));
                 }
             }
+            KillTimer(hwnd, TIMER_ID);
+            SetTimer(hwnd, TIMER_ID, if st.settings.kbm_crosshair { 120 } else { 500 }, None);
             if st.settings.zero_overhead {
-                KillTimer(hwnd, TIMER_ID);
-                SetTimer(hwnd, TIMER_ID, if st.settings.kbm_crosshair { 120 } else if st.settings.hud_overlay { 1000 } else { 1500 }, None);
                 ShowWindow(hwnd, SW_MINIMIZE);
             }
         }
@@ -1053,9 +1056,13 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         }
         Target::ShowKeymap => {
             st.view = 5;
-            st.sys.xinput_pad_details = poll_xinput_pads();
-            st.sys.xinput_pads = st.sys.xinput_pad_details.iter().filter(|p| p.connected).count() as u32;
-            st.set_toast("Opened Controls & Live Keybind Remapper");
+            if st.session.is_some() {
+                st.set_toast("Opened Controls (XInput polling paused while game is running)");
+            } else {
+                st.sys.xinput_pad_details = poll_xinput_pads();
+                st.sys.xinput_pads = st.sys.xinput_pad_details.iter().filter(|p| p.connected).count() as u32;
+                st.set_toast("Opened Controls & Live Keybind Remapper");
+            }
             redraw(hwnd);
             return;
         }
@@ -1414,7 +1421,9 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             redraw(hwnd);
         }
         Target::RumblePad(slot) => {
-            if rumble_xinput_pad(slot, 320) {
+            if st.session.is_some() {
+                st.set_toast("Controller rumble test paused while game is running");
+            } else if rumble_xinput_pad(slot, 320) {
                 st.set_toast(format!("Rumble pulse sent to XInput Pad #{}", slot + 1));
             } else {
                 st.set_toast("Controller did not respond to rumble");
@@ -1971,6 +1980,15 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             });
             redraw(hwnd);
         }
+        Target::ToggleMouseCapture => {
+            st.settings.mouse_capture = !st.settings.mouse_capture;
+            st.save_settings(if st.settings.mouse_capture {
+                "Mouse Capture / Hide Cursor enabled (VICTORY_MOUSE_CAPTURE=1)"
+            } else {
+                "Mouse Capture / Hide Cursor disabled"
+            });
+            redraw(hwnd);
+        }
         Target::RunShaderCensus => {
             if st.census_rx.is_none() {
                 st.start_shader_census_bg();
@@ -1990,9 +2008,9 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             }
         }
         Target::OneClickAutoSetup => {
-            // 1. Auto-pick best runner for this GPU (VIctory-NVIDIA for NVIDIA RTX; Belobug for AMD)
+            // 1. Auto-pick best runner for this GPU (VIctory-NVIDIA for NVIDIA RTX; DexNom for AMD)
             let preferred_slug = if st.sys.gpu_arch == crate::diagnostics::GpuArch::AmdRdna {
-                "belobug"
+                "dexnom"
             } else {
                 "victory-nvidia"
             };
@@ -2066,114 +2084,116 @@ unsafe fn on_timer(hwnd: HWND) {
         return;
     }
     let mut changed = false;
+    let game_running = st.session.as_ref().is_some_and(|s| s.kind == launcher::ProcessKind::Game);
 
-    if let Some(ref prx) = st.portwatch_rx {
-        if let Ok(snap) = prx.try_recv() {
-            let count = snap.projects.len();
-            let err_opt = snap.error.clone();
-            st.portwatch = snap;
-            st.portwatch_rx = None;
-            if let Some(err) = err_opt {
-                st.set_toast(format!("PortWatch VI sync failed: {err}"));
-            } else if count > 0 {
-                st.set_toast(format!("PortWatch VI synced ({count} projects)"));
-            } else {
-                st.set_toast("PortWatch VI sync failed — no projects returned");
-            }
-            changed = true;
-        }
-    }
-
-    if let Some(ref crx) = st.census_rx {
-        match crx.try_recv() {
-            Ok(res) => {
-                st.census_rx = None;
-                match res {
-                    Ok(c) => {
-                        st.set_toast(format!("Shader census complete: {}/{} translated", c.translated, c.total));
-                        st.shader_census = c;
-                    }
-                    Err(e) => {
-                        st.set_toast(e);
-                    }
+    if !game_running {
+        if let Some(ref prx) = st.portwatch_rx {
+            if let Ok(snap) = prx.try_recv() {
+                let count = snap.projects.len();
+                let err_opt = snap.error.clone();
+                st.portwatch = snap;
+                st.portwatch_rx = None;
+                if let Some(err) = err_opt {
+                    st.set_toast(format!("PortWatch VI sync failed: {err}"));
+                } else if count > 0 {
+                    st.set_toast(format!("PortWatch VI synced ({count} projects)"));
+                } else {
+                    st.set_toast("PortWatch VI sync failed — no projects returned");
                 }
                 changed = true;
             }
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                st.census_rx = None;
-                st.set_toast("Shader census finished without output.");
+        }
+
+        if let Some(ref crx) = st.census_rx {
+            match crx.try_recv() {
+                Ok(res) => {
+                    st.census_rx = None;
+                    match res {
+                        Ok(c) => {
+                            st.set_toast(format!("Shader census complete: {}/{} translated", c.translated, c.total));
+                            st.shader_census = c;
+                        }
+                        Err(e) => {
+                            st.set_toast(e);
+                        }
+                    }
+                    changed = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    st.census_rx = None;
+                    st.set_toast("Shader census finished without output.");
+                    changed = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+
+        if let Some(ref grx) = st.gpu_rx {
+            if let Ok((gname, gdrv, vram)) = grx.try_recv() {
+                st.sys.gpu_arch = crate::diagnostics::GpuArch::detect(&gname);
+                st.sys.gpu_name = gname;
+                st.sys.gpu_driver = gdrv;
+                st.sys.vram_gb = vram;
+                st.gpu_rx = None;
+                if st.is_first_run {
+                    st.is_first_run = false;
+                    let _ = crate::presets::apply_adaptive_preset(
+                        &mut st.settings,
+                        crate::presets::PresetKind::Balanced,
+                        &st.sys,
+                    );
+                    let _ = st.settings.save();
+                }
+                st.start_tip_probe();
                 changed = true;
             }
-            Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
-    }
 
-    if let Some(ref grx) = st.gpu_rx {
-        if let Ok((gname, gdrv, vram)) = grx.try_recv() {
-            st.sys.gpu_arch = crate::diagnostics::GpuArch::detect(&gname);
-            st.sys.gpu_name = gname;
-            st.sys.gpu_driver = gdrv;
-            st.sys.vram_gb = vram;
-            st.gpu_rx = None;
-            if st.is_first_run {
-                st.is_first_run = false;
-                let _ = crate::presets::apply_adaptive_preset(
-                    &mut st.settings,
-                    crate::presets::PresetKind::Balanced,
-                    &st.sys,
-                );
-                let _ = st.settings.save();
+        if let Some(ref trx) = st.tip_rx {
+            if let Ok(tip) = trx.try_recv() {
+                if st.system_tip != tip {
+                    st.system_tip = tip;
+                    changed = true;
+                }
+                st.tip_rx = None;
             }
+        }
+
+        if st.last_tip_probe.elapsed() >= Duration::from_secs(10) {
             st.start_tip_probe();
-            changed = true;
         }
-    }
-
-    if let Some(ref trx) = st.tip_rx {
-        if let Ok(tip) = trx.try_recv() {
-            if st.system_tip != tip {
-                st.system_tip = tip;
+        if st.last_headroom_sample.elapsed() >= Duration::from_secs(2) {
+            st.last_headroom_sample = Instant::now();
+            let free_ram_pct = (100u32).saturating_sub(st.sys.mem_load_pct.min(100));
+            let com_gb = st.sys.avail_commit_gb.round().clamp(0.0, 100.0) as u32;
+            let vram_pct: u32 = st.settings.texture_room_percent.trim().parse().unwrap_or(90).clamp(0, 100);
+            for (vec, val) in [
+                (&mut st.free_ram_history, free_ram_pct),
+                (&mut st.avail_commit_history, com_gb),
+                (&mut st.vram_headroom_history, vram_pct),
+            ] {
+                vec.push(val);
+                if vec.len() > 60 {
+                    vec.remove(0);
+                }
+            }
+            if st.view == 4 {
                 changed = true;
             }
-            st.tip_rx = None;
         }
-    }
 
-    let paused_for_game = st.session.is_some() && st.settings.zero_overhead;
-    if !paused_for_game && st.last_tip_probe.elapsed() >= Duration::from_secs(10) {
-        st.start_tip_probe();
-    }
-    if !paused_for_game && st.last_headroom_sample.elapsed() >= Duration::from_secs(2) {
-        st.last_headroom_sample = Instant::now();
-        let free_ram_pct = (100u32).saturating_sub(st.sys.mem_load_pct.min(100));
-        let com_gb = st.sys.avail_commit_gb.round().clamp(0.0, 100.0) as u32;
-        let vram_pct: u32 = st.settings.texture_room_percent.trim().parse().unwrap_or(90).clamp(0, 100);
-        for (vec, val) in [
-            (&mut st.free_ram_history, free_ram_pct),
-            (&mut st.avail_commit_history, com_gb),
-            (&mut st.vram_headroom_history, vram_pct),
-        ] {
-            vec.push(val);
-            if vec.len() > 60 {
-                vec.remove(0);
+        if let Some(ref rx) = st.scan_rx {
+            if let Ok((bytes, count)) = rx.try_recv() {
+                if bytes > 0 {
+                    st.data_label = format!("{} DATA", format_bytes(bytes));
+                    st.file_count_label = format!("{count} FILES");
+                } else {
+                    st.data_label = "DATA NOT FOUND".into();
+                    st.file_count_label = "0 FILES".into();
+                }
+                st.scan_rx = None;
+                changed = true;
             }
-        }
-        if st.view == 4 {
-            changed = true;
-        }
-    }
-
-    if let Some(ref rx) = st.scan_rx {
-        if let Ok((bytes, count)) = rx.try_recv() {
-            if bytes > 0 {
-                st.data_label = format!("{} DATA", format_bytes(bytes));
-                st.file_count_label = format!("{count} FILES");
-            } else {
-                st.data_label = "DATA NOT FOUND".into();
-                st.file_count_label = "0 FILES".into();
-            }
-            st.scan_rx = None;
-            changed = true;
         }
     }
 
@@ -2192,7 +2212,7 @@ unsafe fn on_timer(hwnd: HWND) {
                         sess.window_seen_at = Some(Instant::now());
                     }
                     sess.window_closed_at = None;
-                    if !sess.window_branded || st.anim_tick % 10 == 0 {
+                    if !sess.window_branded {
                         let ico = Settings::app_dir().join("logo.ico");
                         if unsafe { brand_runner_window(pid, "Game Master 6", &ico, true) } {
                             sess.window_branded = true;
@@ -2234,10 +2254,15 @@ unsafe fn on_timer(hwnd: HWND) {
                     }
                 }
             }
-            if st.anim_tick % 6 == 0 {
+            let hud_on = st.settings.hud_overlay;
+            if hud_on && st.anim_tick % 6 == 0 {
                 st.proc_stats = monitor::sample_process(pid);
             }
-            Some(launcher::poll(sess))
+            if sess.kind == launcher::ProcessKind::Game && !hud_on {
+                Some(launcher::poll_status_only(sess))
+            } else {
+                Some(launcher::poll(sess))
+            }
         } else {
             None
         };

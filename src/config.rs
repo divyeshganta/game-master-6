@@ -48,6 +48,7 @@ pub struct Settings {
     pub mouse_aim: bool,             // VICTORY_MOUSE_AIM=1 (Mouse camera + LMB/RMB triggers)
     pub mouse_sens: String,          // VICTORY_MOUSE_SENS (0.6, 1.0, 1.5, 2.0)
     pub mouse_lock: bool,            // VICTORY_MOUSE_LOCK=1 (360-deg cursor centering; F8 pauses)
+    pub mouse_capture: bool,         // VICTORY_MOUSE_CAPTURE=1 (Capture & hide Windows cursor in-game)
     pub async_submit: bool,
     pub queue2: bool,
     pub indirect_window: bool,
@@ -151,6 +152,7 @@ impl Default for Settings {
             mouse_aim: false,
             mouse_sens: "1.0".into(),
             mouse_lock: false,
+            mouse_capture: false,
             async_submit: true,
             queue2: true,
             indirect_window: true,
@@ -301,6 +303,7 @@ impl Settings {
                         }
                     }
                     "mouse_lock" => s.mouse_lock = parse_bool(v),
+                    "mouse_capture" => s.mouse_capture = parse_bool(v),
                     "async_submit" => s.async_submit = parse_bool(v),
                     "queue2" => s.queue2 = parse_bool(v),
                     "indirect_window" => s.indirect_window = parse_bool(v),
@@ -417,6 +420,7 @@ impl Settings {
              mouse_aim={}\n\
              mouse_sens={}\n\
              mouse_lock={}\n\
+             mouse_capture={}\n\
              async_submit={}\n\
              queue2={}\n\
              indirect_window={}\n\
@@ -508,6 +512,7 @@ impl Settings {
             bstr(self.mouse_aim),
             self.mouse_sens.trim(),
             bstr(self.mouse_lock),
+            bstr(self.mouse_capture),
             bstr(self.async_submit),
             bstr(self.queue2),
             bstr(self.indirect_window),
