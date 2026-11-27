@@ -828,7 +828,15 @@ pub fn sync_from_victory_settings(s: &mut Settings, runner_path: &Path) -> bool 
         }
     }
     if let Some(fi) = get("VICTORY_FRAME_INTERVAL_US") {
-        s.frame_interval_us = fi.trim().to_string();
+        let t = fi.trim();
+        if t == "1000" || t == "0" || t.is_empty() {
+            s.frame_interval_us.clear();
+        } else {
+            s.frame_interval_us = t.to_string();
+        }
+    }
+    if let Some(fs_val) = get("VICTORY_FULLSCREEN") {
+        s.borderless = fs_val.trim() == "1";
     }
     true
 }
@@ -856,14 +864,29 @@ pub fn sync_to_victory_settings(s: &Settings, runner_path: &Path) -> Result<(), 
     let dlss_active = !dlss_m.is_empty() && dlss_m != "off";
     let fg_x = if dlss_active { s.framegen_x.clamp(0, 6) } else { 0 };
 
+    let streamlined = is_streamline_runner(runner_path);
     set_kv("VICTORY_MENU_CONSOLE", s.console_model.clone());
-    set_kv("VICTORY_MENU_RES", if s.display_mode == "1280x720" { "720".into() } else if s.display_mode == "1920x1080" { "1080".into() } else { "1440".into() });
     let native_1440 = s.display_mode == "2560x1440"
-        || (is_streamline_runner(runner_path) && s.console_model.eq_ignore_ascii_case("series-x"));
+        || (streamlined && s.console_model.eq_ignore_ascii_case("series-x"));
+    set_kv(
+        "VICTORY_MENU_RES",
+        if native_1440 {
+            "1440".into()
+        } else if s.display_mode == "1280x720" {
+            "720".into()
+        } else if s.display_mode == "1920x1080" {
+            "1080".into()
+        } else {
+            "1440".into()
+        },
+    );
     set_kv("VICTORY_NATIVE_1440P", if native_1440 { "1" } else { "0" }.into());
-    if matches!(s.display_mode.as_str(), "1280x720" | "1664x936" | "1920x1080" | "2560x1440" | "3840x2160") {
+    if native_1440 && streamlined {
+        set_kv("VICTORY_OUTPUT", "2560x1440".into());
+    } else if matches!(s.display_mode.as_str(), "1280x720" | "1664x936" | "1920x1080" | "2560x1440" | "3840x2160") {
         set_kv("VICTORY_OUTPUT", s.display_mode.clone());
     }
+    set_kv("VICTORY_FULLSCREEN", if s.borderless { "1" } else { "0" }.into());
     set_kv("VICTORY_DLSS", if dlss_active { "1" } else { "0" }.into());
     set_kv("VICTORY_DLSS_MODE", if dlss_active { dlss_m.clone() } else { "off".into() });
     set_kv("VICTORY_MENU_DLSS", if dlss_active { dlss_m } else { "off".into() });
@@ -875,9 +898,13 @@ pub fn sync_to_victory_settings(s: &Settings, runner_path: &Path) -> Result<(), 
     }
     set_kv("VICTORY_BVH_BUILDER", if s.bvh_builder { "1" } else { "0" }.into());
     set_kv("VICTORY_LOG", s.effective_victory_log().to_string());
-    if !s.frame_interval_us.trim().is_empty() {
-        set_kv("VICTORY_FRAME_INTERVAL_US", s.frame_interval_us.trim().to_string());
-        if let Ok(us) = s.frame_interval_us.trim().parse::<u32>() {
+    let fi_trim = s.frame_interval_us.trim();
+    if fi_trim.is_empty() || fi_trim == "0" || fi_trim == "1000" {
+        set_kv("VICTORY_FRAME_INTERVAL_US", "1000".into());
+        set_kv("VICTORY_MENU_FPS", "1000".into());
+    } else {
+        set_kv("VICTORY_FRAME_INTERVAL_US", fi_trim.to_string());
+        if let Ok(us) = fi_trim.parse::<u32>() {
             if us > 0 {
                 set_kv("VICTORY_MENU_FPS", (1_000_000 / us).max(1).to_string());
             }

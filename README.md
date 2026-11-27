@@ -2,14 +2,14 @@
 
 <img src="assets/banner.png" alt="Game Master 6 Banner" width="100%" />
 
-# Game Master 6 (v1.4.0)
+# Game Master 6 (v1.5.0)
 
 **A lightweight, zero-dependency Windows GUI launcher, hardware-adaptive VRAM preset manager, and live system telemetry frontend for `victory.exe` compatibility runners.**
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-00e5ff?style=for-the-badge&logo=windows)](https://github.com)
 [![Built with](https://img.shields.io/badge/Built%20with-Rust%20%2B%20Win32%20GDI-ff2e93?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-GPL--3.0-22c55e?style=for-the-badge)](LICENSE)
-[![Latest Release](https://img.shields.io/badge/Release-v1.4.0-f59e0b?style=for-the-badge)](GameMaster6-v1.4-Release.zip)
+[![Latest Release](https://img.shields.io/badge/Release-v1.5.0-f59e0b?style=for-the-badge)](GameMaster6-v1.5.0-Release.zip)
 
 </div>
 
@@ -17,18 +17,12 @@
 
 ---
 
-## What's New in v1.4.0
+## What's New in v1.5.0
 
-- **Focused Primary-Runner Play UI**: Play stays laser-focused on your #1 active runner (showing `DLSS + FG READY` and quick-cycle `DLSS` & `FG` pills when Streamline/DLSS DLLs are present), while secondary runner management (`BUILD FROM URL`, `UPDATE`, `ROLLBACK`, `IMPORT`) lives cleanly in the `Runners` tab.
-- **True Two-Way Sync with `victory-settings.txt`**: Reads `victory-settings.txt` on startup, runner switch, and game exit so the Play UI always reflects what will launch—and clicking `LOW` / `BALANCED` / `HIGH` / `DISPLAY` / `SERIES-S/X` / `DLSS` / `FG` immediately writes those keys back while preserving unrelated settings.
-- **Live Hover Hint Bar & `?` Shortcuts Guide**: Hovering any button, pill, or preset shows a plain-English explanation at the bottom of the window, and the `?` button in the header opens a quick-reference overlay (`F1`, `F3`, `F9`, `Alt+Enter`, `Win+P`, and keyboard-to-pad controls).
-
-- **Shared Save Vault + Isolated Shader Caches**: All runners share one persistent save directory (`VICTORY_DATA_DIR`, defaulting to `%LOCALAPPDATA%\victory\data`) with rolling 5-slot ZIP backups before launch, while shader/pipeline caches stay strictly isolated per runner (`caches\<runner_id>\`) with SHA-256 `.runner_hash` tracking.
-- **1-Click Runner `UPDATE` + `ROLLBACK`**: Source-built runners store `runner-meta.json` (git URL, branch, commit) and expose 1-click `UPDATE` (backs up `.exe`, `git pull`, `cargo build --release`, updates `.runner_hash`, runs `shaders` + `warm`) and `ROLLBACK`.
-- **Zero-Code-Edit Runner Auto-Detection & DLSS/FG Wiring**: Auto-probes `<runner> --help` for `shaders`, `warm`, `translate`, and `upscaler-check`; automatically chains `shaders --jobs <N>` + `warm` in `PREPARE CACHE`; auto-detects `sl.interposer.dll` / `nvngx_dlss.dll` beside `victory.exe` (`VICTORY_STREAMLINE_DIR`), displays `DLSS / FG READY (F1 MENU · F3 STATS)`, and preserves `F1`-saved `victory-settings.txt`.
-- **Opt-In Official NVIDIA SDK Fetcher**: When `BUILD FROM URL...` clones a repo containing `scripts/get-nvidia-sdks.ps1`, an explicit `GET DLSS` button lets you fetch signed NVIDIA Streamline/DLSS DLLs with 1 click.
-- **5-Tier All-GPU Presets (Including 6 GB RTX 4050)**: Added `Tight6` (`<= 6.5 GB` VRAM) alongside `Tight8`, `Mid12`, `High16`, and `Ultra20`.
-- **Optional Local Skin Overlay (`theme.json`)**: Drop a gitignored `theme.json` + custom `logo.png`/`logo.ico` next to `GameMaster6.exe` to customize accent/background colors locally.
+- **1-Click Triforce Auto-Setup**: Fresh installs lacking a runner, NVIDIA Streamline DLSS DLLs, or shader cache get a 1-click **AUTO-SETUP (RUNNER + DLSS + SHADERS)** flow on Play that auto-selects the best runner for your GPU (`VIctory-NVIDIA` for RTX; `Belobug` for AMD), fetches NVIDIA Streamline DLLs, warms shaders, and writes optimal GPU-tier `victory-settings.txt` (including safe 6 GB RTX 4050 defaults).
+- **Live-Verified DLSS / MFG / Borderless / Uncapped FPS**: Streamline runners (`VIctory-NVIDIA`) automatically receive `VICTORY_ASYNC_SUBMIT=1` (keeping DLSS Frame Generation ON), `VICTORY_NATIVE_1440P=1` + `VICTORY_MENU_RES=1440` on <=16 GB GPUs, uncapped FPS (`VICTORY_MENU_FPS=1000`), native `VICTORY_FULLSCREEN=1` + 90s Win32 borderless fallback watcher, and all 4 fast F1 speed switches (`VICTORY_EARLY_DEPTH=1`, `VICTORY_WC_NO_BACK=1`, `VICTORY_SOFT_VIEWS=copies`, `VICTORY_LEAVE_OUT`) without VRAM-hogging overrides.
+- **Zero Zombie Processes**: Every runner process tree is bound to a Windows Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`), backed by automatic pre-launch stray cleanup, a 4-second post-window-close headless watchdog, and a red **STOP GAME** button.
+- **UI, Parser & Telemetry Polish**: Added **SECTION 0 · NVIDIA STREAMLINE & IN-GAME MENU** in Advanced (with `COOL_FOX` badges for fork-specific toggles), renamed `RESET DEFAULTS`, fixed `APPLY FIX` button clipping and Streamline-aware Auto-Doctor advice, fixed `GPU TIMING` log matching (excluding `timer_1ms`), added horizontal log line wrapping and `victory-nvidia-*.log` support, fixed shader census `SCANNING...` lockup, fixed Tools column truncation, updated `Kelvaroq` to `stellarr-studio/kelvaroq`, and enabled live tracker sync (`OFFLINE: OFF`) by default.
 
 ---
 

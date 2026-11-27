@@ -21,6 +21,10 @@ pub enum GpuArch {
 }
 
 impl GpuArch {
+    pub fn is_nvidia(self) -> bool {
+        matches!(self, GpuArch::NvidiaBlackwell | GpuArch::NvidiaAdaAmpere)
+    }
+
     pub fn detect(gpu_name: &str) -> Self {
         let lower = gpu_name.to_ascii_lowercase();
         if lower.is_empty() {
@@ -635,6 +639,33 @@ pub fn list_recent_logs(limit: usize) -> Vec<LogEntry> {
             }
         }
     }
+    // Also surface %LOCALAPPDATA%\victory\logs\victory-nvidia-*.log files
+    if let Some(local_app) = std::env::var_os("LOCALAPPDATA") {
+        let vlogs = PathBuf::from(local_app).join("victory").join("logs");
+        if let Ok(rd) = fs::read_dir(&vlogs) {
+            for e in rd.flatten() {
+                let p = e.path();
+                if p.file_name()
+                    .and_then(|s| s.to_str())
+                    .map(|n| n.starts_with("victory-nvidia-") && n.ends_with(".log"))
+                    .unwrap_or(false)
+                {
+                    if let Ok(meta) = e.metadata() {
+                        let modified = meta.modified().unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                        let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+                        entries.push((
+                            modified,
+                            LogEntry {
+                                name,
+                                path: p,
+                                size_label: format_bytes(meta.len()),
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+    }
     // Also surface VIctory's crashes.log files (which include 'title said:' debug lines)
     if let Some(vdata) = default_victory_data_dir() {
         if let Ok(rd) = fs::read_dir(&vdata) {
@@ -763,12 +794,24 @@ pub fn strip_ansi(input: &str) -> String {
 }
 
 /// Scans log lines for VICTORY_GPU_TIMING / frame-time metrics to show a quick summary pill.
+/// Excludes session header/config lines (`timer_1ms`, `gpu_timing :`, `VICTORY_GPU_TIMING`).
 pub fn summarize_gpu_timings(lines: &[String]) -> Option<String> {
     let mut hits = 0usize;
     let mut last_metric: Option<String> = None;
     for line in lines {
         let lo = line.to_ascii_lowercase();
-        if lo.contains("gpu_timing") || lo.contains("frame time") || (lo.contains("ms") && (lo.contains("pass") || lo.contains("gpu") || lo.contains("fps"))) {
+        if lo.contains("timer_1ms")
+            || lo.contains("gpu_timing")
+            || lo.contains("gpu_offload_env")
+            || lo.starts_with("===")
+        {
+            continue;
+        }
+        let is_frame_metric = lo.contains("on the gpu")
+            || lo.contains("ms/frame")
+            || lo.contains("frame time")
+            || (lo.contains("ms") && (lo.contains("gpu pass") || lo.contains("gpu:") || lo.contains("pass ")));
+        if is_frame_metric {
             hits += 1;
             last_metric = Some(line.trim().to_string());
         }
@@ -1036,7 +1079,7 @@ pub fn parse_shader_census(lines: &[String]) -> ShaderCensus {
             format!("{translated}/{total} translated · {refused} refused ({})", reasons.join("; "))
         }
     } else {
-        "Baseline translator active. Click RUN CENSUS to scan the local shader archive.".into()
+        "Active runner ready. Click RUN CENSUS to scan the local shader archive.".into()
     };
     ShaderCensus { translated, total, refused, summary }
 }

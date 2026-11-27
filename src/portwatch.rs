@@ -23,7 +23,7 @@ const FALLBACK_REPOS: [(&str, &str, f64, &str, &str); 11] = [
     ("VIctory", "Marvisak/VIctory", 50.3, "Playable (Upstream)", "Upstream Rust Xbox Series compatibility runtime"),
     ("AvatarManz", "avatarmanz/VIctory-7900XTX", 83.1, "Playable (AMD)", "AvatarManz's 7900 XTX / AMD VIctory fork"),
     ("DexNom", "DexNom/VIctory", 78.0, "Playable (AMD)", "DexNom's AMD VIctory fork with ray-traced lighting"),
-    ("Kelvaroq", "fablinoo/kelvaroq", 68.8, "Playable (NV)", "Kelvaroq's public Rust runtime built on VIctory and victory-fork"),
+    ("Kelvaroq", "stellarr-studio/kelvaroq", 68.8, "Playable (NV)", "Kelvaroq's public Rust runtime built on VIctory and victory-fork"),
     ("hyphennn", "fxceless/victory-fork", 59.8, "Playable (NV)", "VIctory fork with ray-traced lighting, meshlet & RTX fixes"),
     ("Uilian", "uiliannn/VItoriaBr", 59.6, "Playable (NV)", "Uilian's VItoriaBr built on victory-fork with NVIDIA work"),
     ("XCL", "xcl-dev/xcl", 35.0, "Main menu", "Wine-style Xbox Series layer with HLSL/DXIL shaders"),

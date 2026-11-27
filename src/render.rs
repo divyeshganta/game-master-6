@@ -187,6 +187,7 @@ pub enum Target {
     ExportPresetJson,
     ImportPresetJson,
     OpenReleasesPage,
+    OneClickAutoSetup,
 }
 
 pub const SHADER_PRESETS: [&str; 6] = ["AUTO", "64", "128", "256", "512", "1024"];
@@ -431,7 +432,7 @@ pub struct RenderContext<'a> {
     pub last_crash: Option<&'a (String, String, std::path::PathBuf)>,
     /// Warning text the user has already dismissed (banner stays hidden until it changes).
     pub dismissed_warning: Option<&'a str>,
-    pub adv_collapsed: [bool; 5],
+    pub adv_collapsed: [bool; 6],
     pub system_tip: &'a (bool, String),
     pub log_comparison: Option<&'a LogComparison>,
     pub show_log_compare: bool,
@@ -1208,7 +1209,14 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     rounded_rect(hdc, disp_r, COL_PANEL, COL_BORDER, 14);
     draw_text(hdc, "DISPLAY", RECT::new(disp_r.left + 16, disp_r.top + 12, disp_r.right - 16, disp_r.top + 32), ctx.fonts.small_bold, COL_CYAN, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     let res_btn = RECT::new(disp_r.left + 16, disp_r.top + 38, disp_r.right - 16, disp_r.top + 78);
-    draw_button(hdc, res_btn, ctx.settings.display_mode_label(), ctx.fonts.body_bold, ctx.hover == Target::CycleDisplayMode, COL_CYAN, Target::CycleDisplayMode, hits);
+    let res_lbl = if crate::runners::is_streamline_runner(&ctx.settings.resolved_runner())
+        && ctx.settings.console_model.eq_ignore_ascii_case("series-x")
+    {
+        "2560 x 1440 (1440p Native)"
+    } else {
+        ctx.settings.display_mode_label()
+    };
+    draw_button(hdc, res_btn, res_lbl, ctx.fonts.body_bold, ctx.hover == Target::CycleDisplayMode, COL_CYAN, Target::CycleDisplayMode, hits);
     let win_btn = RECT::new(disp_r.left + 16, disp_r.top + 86, disp_r.right - 16, disp_r.bottom - 14);
     let win_lbl = if ctx.settings.borderless { "Borderless Fullscreen" } else { "Windowed" };
     draw_button(hdc, win_btn, win_lbl, ctx.fonts.small_bold, ctx.hover == Target::ToggleBorderless, COL_EMERALD, Target::ToggleBorderless, hits);
@@ -1313,7 +1321,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     }
     let play_lbl = if let Some(sess) = ctx.session {
         let secs = sess.started_at.elapsed().as_secs();
-        format!("■  RUNNING ({:02}:{:02}) — STOP", secs / 60, secs % 60)
+        format!("■  STOP GAME ({:02}:{:02})", secs / 60, secs % 60)
     } else {
         "▶  LAUNCH Game Master 6".into()
     };
@@ -1322,11 +1330,18 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     } else {
         ctx.settings.active_runner_kind().badge()
     };
+    let disp_lbl_sub = if crate::runners::is_streamline_runner(&ctx.settings.resolved_runner())
+        && ctx.settings.console_model.eq_ignore_ascii_case("series-x")
+    {
+        "2560 x 1440 (1440p Native)"
+    } else {
+        ctx.settings.display_mode_label()
+    };
     let play_sub = format!(
         "{}  ·  {}  ·  {}  ·  {}",
         play_badge,
         ctx.settings.console_model.to_ascii_uppercase(),
-        ctx.settings.display_mode_label(),
+        disp_lbl_sub,
         if ctx.settings.borderless { "BORDERLESS" } else { "WINDOWED" }
     );
     draw_text(hdc, &play_lbl, RECT::new(play_r.left + 14, play_r.top + 10, play_r.right - 14, play_r.top + 52), ctx.fonts.title, COL_WHITE, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
@@ -1360,21 +1375,25 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     } else if ctx.settings.exe.trim().is_empty()
         || !std::path::Path::new(&ctx.settings.exe).is_file()
         || !ctx.settings.resolved_runner().is_file()
+        || (ctx.sys.gpu_arch.is_nvidia()
+            && !crate::runners::has_dlss_dlls_beside(&ctx.settings.resolved_runner()))
+        || !ctx.audit.shader_cache_ready
     {
         let cy = actions_y + actions_h + 14;
         let ch = (r.bottom - cy - 34).clamp(84, 108);
         if ch >= 84 {
             let cr = RECT::new(r.left, cy, r.right, cy + ch);
             rounded_rect(hdc, cr, COL_PANEL, COL_BORDER, 12);
-            draw_text(hdc, "3-STEP FIRST-RUN SETUP · DRAG & DROP .EXE OR RUNNER FOLDER ANYWHERE", RECT::new(cr.left + 16, cr.top + 10, cr.right - 360, cr.top + 32), ctx.fonts.small_bold, COL_AMBER, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-            let step1 = if std::path::Path::new(&ctx.settings.exe).is_file() { "1. Game Exe: OK" } else { "1. Drop/Browse Game Exe" };
-            let step2 = if ctx.settings.resolved_runner().is_file() { "2. Runner: OK" } else { "2. Drop/Browse Runner" };
-            let step3 = if ctx.audit.shader_cache_ready { "3. Cache: Ready" } else { "3. Prepare Cache & Play" };
-            draw_text(hdc, &format!("{step1}   ·   {step2}   ·   {step3}"), RECT::new(cr.left + 16, cr.top + 38, cr.right - 360, cr.bottom - 10), ctx.fonts.small, COL_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-            let br_r = RECT::new(cr.right - 168, cr.top + 20, cr.right - 14, cr.bottom - 20);
+            draw_text(hdc, "1-CLICK TRIFORCE AUTO-SETUP · RUNNER + DLSS + SHADER WARM-UP", RECT::new(cr.left + 16, cr.top + 10, cr.right - 360, cr.top + 32), ctx.fonts.small_bold, COL_CYAN, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            let step1 = if std::path::Path::new(&ctx.settings.exe).is_file() { "1. Game Exe: OK" } else { "1. Drop/Browse Exe" };
+            let step2 = if ctx.settings.resolved_runner().is_file() { "2. Runner: OK" } else { "2. Auto-Pick Runner" };
+            let step3 = if !ctx.sys.gpu_arch.is_nvidia() || crate::runners::has_dlss_dlls_beside(&ctx.settings.resolved_runner()) { "3. DLSS: OK" } else { "3. Fetch DLSS" };
+            let step4 = if ctx.audit.shader_cache_ready { "4. Cache: OK" } else { "4. Warm Shaders" };
+            draw_text(hdc, &format!("{step1}  ·  {step2}  ·  {step3}  ·  {step4}"), RECT::new(cr.left + 16, cr.top + 38, cr.right - 360, cr.bottom - 10), ctx.fonts.small, COL_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            let auto_r = RECT::new(cr.right - 292, cr.top + 20, cr.right - 14, cr.bottom - 20);
+            draw_button(hdc, auto_r, "AUTO-SETUP (RUNNER + DLSS + SHADERS)", ctx.fonts.small_bold, ctx.hover == Target::OneClickAutoSetup, COL_EMERALD, Target::OneClickAutoSetup, hits);
+            let br_r = RECT::new(auto_r.left - 134, cr.top + 20, auto_r.left - 8, cr.bottom - 20);
             draw_button(hdc, br_r, "BROWSE EXE...", ctx.fonts.small_bold, ctx.hover == Target::BrowseExe, COL_AMBER, Target::BrowseExe, hits);
-            let run_b = RECT::new(br_r.left - 168, cr.top + 20, br_r.left - 8, cr.bottom - 20);
-            draw_button(hdc, run_b, "BROWSE RUNNER...", ctx.fonts.small_bold, ctx.hover == Target::BrowseRunner, COL_CYAN, Target::BrowseRunner, hits);
             card_bottom = cr.bottom;
         }
     } else if let Some(doc) = ctx.auto_doctor {
@@ -1397,7 +1416,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
             draw_button(hdc, cp_r, "COPY MD", ctx.fonts.small_bold, ctx.hover == Target::CopyBenchmarkMd, COL_CYAN, Target::CopyBenchmarkMd, hits);
             let mut next_right = cp_r.left - 8;
             if let Some(fix) = doc.recommended_fix {
-                let fx_r = RECT::new(next_right - 196, cr.top + 20, next_right, cr.bottom - 20);
+                let fx_r = RECT::new(next_right - 136, cr.top + 20, next_right, cr.bottom - 20);
                 draw_button(hdc, fx_r, fix.label(), ctx.fonts.small_bold, ctx.hover == Target::ApplyDoctorFix, COL_AMBER, Target::ApplyDoctorFix, hits);
                 next_right = fx_r.left - 8;
             }
@@ -1911,10 +1930,10 @@ unsafe fn draw_library(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(R
 
     // Table header
     let mut y = r.top + 92;
-    draw_text(hdc, "COMPONENT", RECT::new(r.left + 28, y, r.left + 240, y + 22), ctx.fonts.small_bold, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    draw_text(hdc, "STATUS", RECT::new(r.left + 250, y, r.left + 360, y + 22), ctx.fonts.small_bold, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    draw_text(hdc, "SIZE / DETAIL", RECT::new(r.left + 370, y, r.left + 510, y + 22), ctx.fonts.small_bold, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    draw_text(hdc, "RESOLVED PATH", RECT::new(r.left + 520, y, r.right - 28, y + 22), ctx.fonts.small_bold, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(hdc, "COMPONENT", RECT::new(r.left + 28, y, r.left + 230, y + 22), ctx.fonts.small_bold, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(hdc, "STATUS", RECT::new(r.left + 240, y, r.left + 334, y + 22), ctx.fonts.small_bold, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(hdc, "SIZE / DETAIL", RECT::new(r.left + 344, y, r.left + 536, y + 22), ctx.fonts.small_bold, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(hdc, "RESOLVED PATH", RECT::new(r.left + 546, y, r.right - 28, y + 22), ctx.fonts.small_bold, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     y += 30;
 
     for (idx, item) in ctx.audit.items.iter().enumerate() {
@@ -1923,10 +1942,10 @@ unsafe fn draw_library(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(R
             break;
         }
         rounded_rect(hdc, row_r, if idx % 2 == 0 { COL_PANEL_ALT } else { COL_SIDEBAR }, COL_BORDER, 10);
-        draw_text(hdc, item.name, RECT::new(row_r.left + 12, row_r.top + 4, row_r.left + 224, row_r.top + 24), ctx.fonts.body_bold, COL_WHITE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        draw_text(hdc, item.role, RECT::new(row_r.left + 12, row_r.top + 24, row_r.left + 224, row_r.bottom - 4), ctx.fonts.small, COL_DIM, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        draw_text(hdc, item.name, RECT::new(row_r.left + 12, row_r.top + 4, row_r.left + 214, row_r.top + 24), ctx.fonts.body_bold, COL_WHITE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        draw_text(hdc, item.role, RECT::new(row_r.left + 12, row_r.top + 24, row_r.left + 214, row_r.bottom - 4), ctx.fonts.small, COL_DIM, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-        let pill_r = RECT::new(row_r.left + 230, row_r.top + 10, row_r.left + 324, row_r.bottom - 10);
+        let pill_r = RECT::new(row_r.left + 220, row_r.top + 10, row_r.left + 314, row_r.bottom - 10);
         let is_optional = idx == 7;
         let (bg, fg, lbl) = if item.present {
             (COL_EMERALD_BG, COL_EMERALD, "FOUND")
@@ -1937,8 +1956,8 @@ unsafe fn draw_library(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(R
         };
         draw_pill(hdc, pill_r, lbl, ctx.fonts.small_bold, bg, fg, fg);
 
-        draw_text(hdc, &item.detail, RECT::new(row_r.left + 350, row_r.top, row_r.left + 490, row_r.bottom), ctx.fonts.small_bold, COL_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        draw_text(hdc, &item.path, RECT::new(row_r.left + 500, row_r.top, row_r.right - 14, row_r.bottom), ctx.fonts.small, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
+        draw_text(hdc, &item.detail, RECT::new(row_r.left + 324, row_r.top, row_r.left + 516, row_r.bottom), ctx.fonts.small_bold, COL_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+        draw_text(hdc, &item.path, RECT::new(row_r.left + 526, row_r.top, row_r.right - 14, row_r.bottom), ctx.fonts.small, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
         y += 52;
     }
 
@@ -1996,8 +2015,8 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
     let ab_exp = crate::ab_bench::AbExperiment::from_id(&ctx.settings.ab_experiment);
     let ab_col = if ab_exp == crate::ab_bench::AbExperiment::Off { COL_MUTED } else { COL_EMERALD };
     draw_button(hdc, ab_r, ab_exp.label(), ctx.fonts.small_bold, ctx.hover == Target::CycleAbExperiment, ab_col, Target::CycleAbExperiment, hits);
-    let rst_r = RECT::new(ab_r.left - 112, r.top + 20, ab_r.left - 8, r.top + 52);
-    draw_button(hdc, rst_r, "V11 RESET", ctx.fonts.small_bold, ctx.hover == Target::ResetV11Perf, COL_CORAL, Target::ResetV11Perf, hits);
+    let rst_r = RECT::new(ab_r.left - 134, r.top + 20, ab_r.left - 8, r.top + 52);
+    draw_button(hdc, rst_r, "RESET DEFAULTS", ctx.fonts.small_bold, ctx.hover == Target::ResetV11Perf, COL_CORAL, Target::ResetV11Perf, hits);
     let flt_r = RECT::new(rst_r.left - 116, r.top + 20, rst_r.left - 8, r.top + 52);
     let flt_lbl = format!("FILTER: {}", ctx.adv_filter);
     draw_button(hdc, flt_r, &flt_lbl, ctx.fonts.small_bold, ctx.hover == Target::CycleAdvFilter, COL_CYAN, Target::CycleAdvFilter, hits);
@@ -2125,6 +2144,33 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
         .to_string();
     let dgpu_desc = format!("Sets Windows GpuPreference=2 for {runner_disp} on hybrid GPUs.");
 
+    let runner_path = ctx.settings.resolved_runner();
+    let is_sl = crate::runners::is_streamline_runner(&runner_path);
+    let c3_gap = 10;
+    let c3_w = (inner_w - c3_gap * 2) / 3;
+
+    // ── Section 0: NVIDIA STREAMLINE & IN-GAME MENU (synced to victory-settings.txt) ──
+    let s0_items: [(&str, &str, bool, bool, &str, Target); 6] = [
+        ("DLSS MODE", "VICTORY_DLSS_MODE (victory-settings.txt)", ctx.settings.dlss_mode != "off", false, ctx.settings.dlss_mode_label(), Target::CycleDlssMode),
+        ("FRAME GENERATION", "VICTORY_FRAMEGEN_X (2x-6x on RTX 40/50)", ctx.settings.framegen_x > 0, false, &ctx.settings.framegen_label(), Target::CycleFrameGen),
+        ("NATIVE 1440P", "VICTORY_NATIVE_1440P=1 (2560x1440 Series X)", ctx.settings.display_mode == "2560x1440" || (is_sl && ctx.settings.console_model.eq_ignore_ascii_case("series-x")), false, if is_sl && ctx.settings.console_model.eq_ignore_ascii_case("series-x") { "1440P" } else { ctx.settings.display_mode_label() }, Target::CycleDisplayMode),
+        ("FULLSCREEN (NO BORDER)", "VICTORY_FULLSCREEN=1 (F1 borderless)", ctx.settings.borderless, false, if ctx.settings.borderless { "ON" } else { "OFF" }, Target::ToggleBorderless),
+        ("TEXTURE ROOM %", "VICTORY_TEXTURE_ROOM_PERCENT cap", true, false, &ctx.settings.texture_room_label(), Target::CycleTextureRoom),
+        ("RAY TRACING (BVH)", "VICTORY_BVH_BUILDER (keep OFF for speed)", ctx.settings.bvh_builder, true, if ctx.settings.bvh_builder { "ON" } else { "OFF" }, Target::ToggleBvhBuilder),
+    ];
+    let s0_on = s0_items.iter().filter(|x| x.2).count();
+    draw_sec_hdr(hdc, 0, "SECTION 0 · NVIDIA STREAMLINE & IN-GAME MENU (victory-settings.txt)", s0_on, s0_items.len(), y, &mut card_hits);
+    y += 34;
+    if !ctx.adv_collapsed[0] {
+        for (i, (t, d, on, exp, plbl, tgt)) in s0_items.iter().enumerate() {
+            let col = (i % 3) as i32;
+            let row = (i / 3) as i32;
+            let cr = RECT::new(left_x + col * (c3_w + c3_gap), y + row * (row_h + row_gap), left_x + col * (c3_w + c3_gap) + c3_w, y + row * (row_h + row_gap) + row_h);
+            draw_adv_card(hdc, cr, t, d, *on, *exp, plbl, *tgt, &mut card_hits);
+        }
+        y += ((s0_items.len() + 2) / 3) as i32 * (row_h + row_gap) + 6;
+    }
+
     // ── Section 1: SYSTEM & HOST SCHEDULING (2-col grid) ────────────────────
     let s1_items: [(&str, &str, bool, bool, &str, Target); 6] = [
         ("FORCE DEDICATED GPU (HIGH PERF)", &dgpu_desc, ctx.settings.prefer_dgpu, false, if ctx.settings.prefer_dgpu { "ON" } else { "OFF" }, Target::TogglePreferDgpu),
@@ -2135,9 +2181,9 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
         ("1MS TIMER", "High-resolution Windows 1ms multimedia frame pacing.", ctx.settings.timer_1ms, false, if ctx.settings.timer_1ms { "ON" } else { "OFF" }, Target::ToggleTimer1ms),
     ];
     let s1_on = s1_items.iter().filter(|x| x.2).count();
-    draw_sec_hdr(hdc, 0, "SECTION 1 · SYSTEM & HOST SCHEDULING", s1_on, s1_items.len(), y, &mut card_hits);
+    draw_sec_hdr(hdc, 1, "SECTION 1 · SYSTEM & HOST SCHEDULING", s1_on, s1_items.len(), y, &mut card_hits);
     y += 34;
-    if !ctx.adv_collapsed[0] {
+    if !ctx.adv_collapsed[1] {
         let c2_gap = 12;
         let c2_w = (inner_w - c2_gap) / 2;
         for (i, (t, d, on, exp, plbl, tgt)) in s1_items.iter().enumerate() {
@@ -2155,9 +2201,6 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
         y += 3 * (row_h + row_gap) + 6;
     }
 
-    let c3_gap = 10;
-    let c3_w = (inner_w - c3_gap * 2) / 3;
-
     // ── Section 2: VRAM, TEXTURES & BUFFERS (3-col grid) ────────────────────
     let buf_lbl = ctx.settings.card_buffers_label();
     let buf_on = !ctx.settings.card_buffers_min_mb.trim().is_empty();
@@ -2174,9 +2217,10 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
         ("INPLACE BUF", "Experimental: in-place title buffer mapping", ctx.settings.inplace_buf, true, if ctx.settings.inplace_buf { "ON" } else { "OFF" }, Target::ToggleInplaceBuf),
     ];
     let s2_on = s2_items.iter().filter(|x| x.2).count();
-    draw_sec_hdr(hdc, 1, "SECTION 2 · VRAM, TEXTURES & BUFFERS", s2_on, s2_items.len(), y, &mut card_hits);
+    let s2_title = if is_sl { "SECTION 2 · VRAM, TEXTURES & BUFFERS  [COOL_FOX]" } else { "SECTION 2 · VRAM, TEXTURES & BUFFERS" };
+    draw_sec_hdr(hdc, 2, s2_title, s2_on, s2_items.len(), y, &mut card_hits);
     y += 34;
-    if !ctx.adv_collapsed[1] {
+    if !ctx.adv_collapsed[2] {
         for (i, (t, d, on, exp, plbl, tgt)) in s2_items.iter().enumerate() {
             let col = (i % 3) as i32;
             let row = (i / 3) as i32;
@@ -2203,9 +2247,10 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
         ("HOIST CLAMPS", "Hoist indirect clamps (GPU cut)", ctx.settings.hoist_clamps, false, if ctx.settings.hoist_clamps { "ON" } else { "OFF" }, Target::ToggleHoistClamps),
     ];
     let s3_on = s3_items.iter().filter(|x| x.2).count();
-    draw_sec_hdr(hdc, 2, "SECTION 3 · GPU PIPELINE & PARALLELISM", s3_on, s3_items.len(), y, &mut card_hits);
+    let s3_title = if is_sl { "SECTION 3 · GPU PIPELINE & PARALLELISM  [COOL_FOX]" } else { "SECTION 3 · GPU PIPELINE & PARALLELISM" };
+    draw_sec_hdr(hdc, 3, s3_title, s3_on, s3_items.len(), y, &mut card_hits);
     y += 34;
-    if !ctx.adv_collapsed[2] {
+    if !ctx.adv_collapsed[3] {
         for (i, (t, d, on, exp, plbl, tgt)) in s3_items.iter().enumerate() {
             let col = (i % 3) as i32;
             let row = (i / 3) as i32;
@@ -2226,9 +2271,9 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
         ("Open-World RETICLE", "Center dot + auto menu cursor", ctx.settings.kbm_crosshair, false, if ctx.settings.kbm_crosshair { "ON" } else { "OFF" }, Target::ToggleKbmCrosshair),
     ];
     let s4_on = s4_items.iter().filter(|x| x.2).count();
-    draw_sec_hdr(hdc, 3, "SECTION 4 · DISPLAY, VISUALS & HUD", s4_on, s4_items.len(), y, &mut card_hits);
+    draw_sec_hdr(hdc, 4, "SECTION 4 · DISPLAY, VISUALS & HUD", s4_on, s4_items.len(), y, &mut card_hits);
     y += 34;
-    if !ctx.adv_collapsed[3] {
+    if !ctx.adv_collapsed[4] {
         for (i, (t, d, on, exp, plbl, tgt)) in s4_items.iter().enumerate() {
             let col = (i % 3) as i32;
             let row = (i / 3) as i32;
@@ -2281,9 +2326,9 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
         ("CPU PROFILER", "Dump VICTORY_PROFILE=1 hotspots", ctx.settings.profiler_on, false, if ctx.settings.profiler_on { "ON" } else { "OFF" }, Target::ToggleProfiler),
     ];
     let s5_on = s5_items.iter().filter(|x| x.2).count();
-    draw_sec_hdr(hdc, 4, "SECTION 5 · DIAGNOSTICS & DEBUG", s5_on, s5_items.len(), y, &mut card_hits);
+    draw_sec_hdr(hdc, 5, "SECTION 5 · DIAGNOSTICS & DEBUG", s5_on, s5_items.len(), y, &mut card_hits);
     y += 34;
-    if !ctx.adv_collapsed[4] {
+    if !ctx.adv_collapsed[5] {
         for (i, (t, d, on, exp, plbl, tgt)) in s5_items.iter().enumerate() {
             let col = (i % 3) as i32;
             let cr = RECT::new(left_x + col * (c3_w + c3_gap), y, left_x + col * (c3_w + c3_gap) + c3_w, y + row_h);
@@ -2505,14 +2550,9 @@ unsafe fn draw_logs(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     } else {
         let line_h = 19;
         let visible = ((term_r.height() - 24) / line_h).max(1) as usize;
-        let total = filtered.len();
-        let max_scroll = total.saturating_sub(visible);
-        let scroll = ctx.log_scroll.min(max_scroll);
-        // scroll = 0 means pinned to bottom (latest lines)
-        let start = total.saturating_sub(visible + scroll);
-        let end = (start + visible).min(total);
-        for (row, line) in filtered[start..end].iter().enumerate() {
-            let ly = term_r.top + 12 + row as i32 * line_h;
+        let mut visual_rows: Vec<(String, DWORD)> = Vec::new();
+        let max_cols = ((term_r.width() - 32) / 7).clamp(60, 180) as usize;
+        for line in &filtered {
             let lo = line.to_ascii_lowercase();
             let col = if crate::diagnostics::is_known_wave32_note(line) {
                 COL_CYAN
@@ -2525,7 +2565,30 @@ unsafe fn draw_logs(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
             } else {
                 COL_TEXT
             };
-            draw_text(hdc, line, RECT::new(term_r.left + 14, ly, term_r.right - 14, ly + line_h), ctx.fonts.mono, col, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            if line.chars().count() <= max_cols {
+                visual_rows.push(((*line).clone(), col));
+            } else {
+                let mut cur = String::new();
+                for ch in line.chars() {
+                    cur.push(ch);
+                    if cur.chars().count() >= max_cols {
+                        visual_rows.push((std::mem::take(&mut cur), col));
+                    }
+                }
+                if !cur.is_empty() {
+                    visual_rows.push((cur, col));
+                }
+            }
+        }
+        let total = visual_rows.len();
+        let max_scroll = total.saturating_sub(visible);
+        let scroll = ctx.log_scroll.min(max_scroll);
+        // scroll = 0 means pinned to bottom (latest lines)
+        let start = total.saturating_sub(visible + scroll);
+        let end = (start + visible).min(total);
+        for (row, (line, col)) in visual_rows[start..end].iter().enumerate() {
+            let ly = term_r.top + 12 + row as i32 * line_h;
+            draw_text(hdc, line, RECT::new(term_r.left + 14, ly, term_r.right - 14, ly + line_h), ctx.fonts.mono, *col, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         }
     }
     RestoreDC(hdc, saved);

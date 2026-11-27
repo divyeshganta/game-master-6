@@ -296,20 +296,34 @@ pub fn sync_sessions_from_logs() {
         }
     }
 
-    let Ok(rd) = fs::read_dir(logs_dir()) else {
-        return;
-    };
-    let mut log_files: Vec<PathBuf> = rd
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.is_file()
+    let mut log_files: Vec<PathBuf> = Vec::new();
+    if let Ok(rd) = fs::read_dir(logs_dir()) {
+        for p in rd.flatten().map(|e| e.path()) {
+            if p.is_file()
                 && p.file_name()
                     .and_then(|n| n.to_str())
                     .map(|n| n.starts_with("GM6-") && n.ends_with(".log"))
                     .unwrap_or(false)
-        })
-        .collect();
+            {
+                log_files.push(p);
+            }
+        }
+    }
+    if let Some(local_app) = std::env::var_os("LOCALAPPDATA") {
+        let vlogs = PathBuf::from(local_app).join("victory").join("logs");
+        if let Ok(rd) = fs::read_dir(&vlogs) {
+            for p in rd.flatten().map(|e| e.path()) {
+                if p.is_file()
+                    && p.file_name()
+                        .and_then(|n| n.to_str())
+                        .map(|n| n.starts_with("victory-nvidia-") && n.ends_with(".log"))
+                        .unwrap_or(false)
+                {
+                    log_files.push(p);
+                }
+            }
+        }
+    }
     log_files.sort();
 
     let mut changed = false;
@@ -322,10 +336,20 @@ pub fn sync_sessions_from_logs() {
         if lines.is_empty() {
             continue;
         }
-        let mut runner = "victory.exe".to_string();
-        let mut console = "series-s".to_string();
+        let mut runner = if fname.starts_with("victory-nvidia-") {
+            "victory-nvidia".to_string()
+        } else {
+            "victory.exe".to_string()
+        };
+        let mut console = String::new();
         let mut is_prepare = false;
         for l in lines.iter().take(20) {
+            let lo = l.to_ascii_lowercase();
+            if lo.contains("victory_menu_console=series-x") || lo.contains("--console series-x") || lo.contains("console=series-x") {
+                console = "series-x".into();
+            } else if lo.contains("victory_menu_console=series-s") || lo.contains("--console series-s") || lo.contains("console=series-s") {
+                console = "series-s".into();
+            }
             if let Some((_, v)) = l.split_once(':') {
                 let k = l.split(':').next().unwrap_or("").trim();
                 let val = v.trim();
@@ -338,6 +362,13 @@ pub fn sync_sessions_from_logs() {
                 }
             }
         }
+        if console.is_empty() {
+            console = if runner.to_ascii_lowercase().contains("victory-nvidia") {
+                "series-x".into()
+            } else {
+                "series-s".into()
+            };
+        }
         if is_prepare {
             continue;
         }
@@ -349,7 +380,7 @@ pub fn sync_sessions_from_logs() {
         } else {
             extract_peak_fps(&lines)
                 .map(|f| format!("{f:.1} fps"))
-                .unwrap_or_else(|| "-".into())
+                .unwrap_or_else(|| "N/A".into())
         };
         let top_shader = slow
             .first()
@@ -706,10 +737,10 @@ pub enum DoctorFix {
 impl DoctorFix {
     pub fn label(self) -> &'static str {
         match self {
-            DoctorFix::LowerTexRoom90 => "APPLY FIX: CAP VRAM ROOM 90%",
-            DoctorFix::EnableMemTrim => "APPLY FIX: ENABLE MEM TRIM",
-            DoctorFix::PrepareCache => "APPLY FIX: PREPARE CACHE",
-            DoctorFix::SwitchBalanced1080p => "APPLY FIX: BALANCED 1080P",
+            DoctorFix::LowerTexRoom90 => "APPLY FIX",
+            DoctorFix::EnableMemTrim => "APPLY FIX",
+            DoctorFix::PrepareCache => "APPLY FIX",
+            DoctorFix::SwitchBalanced1080p => "APPLY FIX",
         }
     }
 }
@@ -787,24 +818,38 @@ pub fn analyze_session_log(runner_name: &str, log_path: &Path, sys: &SystemInfo,
     let gpu_ms = stats.avg_gpu_ms.unwrap_or(0.0);
     let prep_ms = 0.0_f64;
 
+    let is_streamline = runner_name.to_ascii_lowercase().contains("victory-nvidia")
+        || runner_name.to_ascii_lowercase().contains("streamline");
     let (diagnosis, advice, recommended_fix) = if crashed {
         (
             "Session Crashed".to_string(),
-            "Switch to BALANCED 1080p or rollback to pinned baseline.".to_string(),
+            if is_streamline {
+                "Switch to BALANCED 1440p DLSS or rollback to pinned baseline.".to_string()
+            } else {
+                "Switch to BALANCED 1080p or rollback to pinned baseline.".to_string()
+            },
             Some(DoctorFix::SwitchBalanced1080p),
         )
     } else if missing_pipe > 10 && avg_fps < 5.0 {
         (
             "Missing Pipeline Cache".to_string(),
-            "Run Prepare Cache (translate --pipelines) before launching.".to_string(),
+            "Run Prepare Cache (shaders --jobs + warm) before launching.".to_string(),
             Some(DoctorFix::PrepareCache),
         )
     } else if no_room {
-        (
-            "VRAM Ceiling Reached".to_string(),
-            "Cap texture room to 90% and target room to 2048 MB to avoid WDDM spillover.".to_string(),
-            Some(DoctorFix::LowerTexRoom90),
-        )
+        if is_streamline {
+            (
+                "VRAM Ceiling Reached".to_string(),
+                "Lower texture room to 72% (or DLSS Performance) to preserve Streamline FG headroom.".to_string(),
+                Some(DoctorFix::LowerTexRoom90),
+            )
+        } else {
+            (
+                "VRAM Ceiling Reached".to_string(),
+                "Cap texture room to 90% and target room to 2048 MB to avoid WDDM spillover.".to_string(),
+                Some(DoctorFix::LowerTexRoom90),
+            )
+        }
     } else if pressure {
         (
             "Host RAM Pressure".to_string(),

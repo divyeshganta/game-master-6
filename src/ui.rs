@@ -81,7 +81,7 @@ struct AppState {
     last_crash: Option<(String, String, PathBuf)>,
     /// Exact warning text the user dismissed, so a new warning reappears.
     dismissed_warning: Option<String>,
-    adv_collapsed: [bool; 5],
+    adv_collapsed: [bool; 6],
     system_tip: (bool, String),
     tip_rx: Option<Receiver<(bool, String)>>,
     last_tip_probe: Instant,
@@ -1147,9 +1147,16 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             if let Some(ref doc) = st.auto_doctor {
                 match doc.recommended_fix {
                     Some(telemetry::DoctorFix::LowerTexRoom90) => {
-                        st.settings.texture_room_percent = "90".into();
-                        st.settings.card_room_for_targets_mb = "2048".into();
-                        st.save_settings("Auto-Doctor: capped VRAM room to 90% / 2048 MB");
+                        let runner_path = st.settings.resolved_runner();
+                        if crate::runners::is_streamline_runner(&runner_path) {
+                            st.settings.texture_room_percent = "72".into();
+                            let _ = crate::runners::sync_to_victory_settings(&st.settings, &runner_path);
+                            st.save_settings("Auto-Doctor: set Streamline texture room to 72%");
+                        } else {
+                            st.settings.texture_room_percent = "90".into();
+                            st.settings.card_room_for_targets_mb = "2048".into();
+                            st.save_settings("Auto-Doctor: capped VRAM room to 90% / 2048 MB");
+                        }
                     }
                     Some(telemetry::DoctorFix::EnableMemTrim) => {
                         st.save_settings("Auto-Doctor: idle memory trimming enabled");
@@ -1982,6 +1989,50 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
                 redraw(hwnd);
             }
         }
+        Target::OneClickAutoSetup => {
+            // 1. Auto-pick best runner for this GPU (VIctory-NVIDIA for NVIDIA RTX; Belobug for AMD)
+            let preferred_slug = if st.sys.gpu_arch == crate::diagnostics::GpuArch::AmdRdna {
+                "belobug"
+            } else {
+                "victory-nvidia"
+            };
+            if !st.settings.resolved_runner().is_file() {
+                let runners = discover_runners(&st.settings);
+                if let Some(best) = runners.iter().find(|r| r.name.to_ascii_lowercase().contains(preferred_slug))
+                    .or_else(|| runners.first())
+                {
+                    st.settings.runner = best.path.to_string_lossy().into_owned();
+                }
+            }
+            let rpath = st.settings.resolved_runner();
+            // 2. Fetch NVIDIA Streamline DLSS DLLs if missing on NVIDIA GPUs
+            if st.sys.gpu_arch.is_nvidia() && rpath.is_file() && !crate::runners::has_dlss_dlls_beside(&rpath) {
+                if let Some(parent) = rpath.parent() {
+                    use std::os::windows::process::CommandExt;
+                    let mut c = std::process::Command::new(&rpath);
+                    c.arg("get-dlss")
+                        .env("VICTORY_STREAMLINE_DIR", parent)
+                        .creation_flags(0x08000000);
+                    let _ = c.status();
+                }
+            }
+            // 3. Write optimal GPU-tier victory-settings.txt (safe 6 GB RTX 4050 defaults included)
+            let _ = crate::presets::apply_adaptive_preset(&mut st.settings, crate::presets::PresetKind::Balanced, &st.sys);
+            if crate::presets::HardwareTier::from_vram_gb(st.sys.vram_gb) == crate::presets::HardwareTier::Tight6 {
+                st.settings.dlss_mode = "performance".into();
+                st.settings.framegen_x = 2;
+                st.settings.texture_room_percent = "70".into();
+                let _ = crate::runners::sync_to_victory_settings(&st.settings, &rpath);
+            }
+            st.save_settings("Auto-Setup: runner + DLSS + optimal GPU-tier settings applied");
+            // 4. Warm shaders with live progress bar if game exe is present
+            if std::path::Path::new(&st.settings.exe).is_file() && rpath.is_file() {
+                handle_prepare(hwnd);
+            } else {
+                st.set_toast("Runner & DLSS configured! Browse/drop your game executable to warm shaders.");
+            }
+            redraw(hwnd);
+        }
         Target::BenchmarkRun => {
             if st.session.is_some() {
                 st.set_toast("A session is already running");
@@ -2034,18 +2085,26 @@ unsafe fn on_timer(hwnd: HWND) {
     }
 
     if let Some(ref crx) = st.census_rx {
-        if let Ok(res) = crx.try_recv() {
-            st.census_rx = None;
-            match res {
-                Ok(c) => {
-                    st.set_toast(format!("Shader census complete: {}/{} translated", c.translated, c.total));
-                    st.shader_census = c;
+        match crx.try_recv() {
+            Ok(res) => {
+                st.census_rx = None;
+                match res {
+                    Ok(c) => {
+                        st.set_toast(format!("Shader census complete: {}/{} translated", c.translated, c.total));
+                        st.shader_census = c;
+                    }
+                    Err(e) => {
+                        st.set_toast(e);
+                    }
                 }
-                Err(e) => {
-                    st.set_toast(e);
-                }
+                changed = true;
             }
-            changed = true;
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                st.census_rx = None;
+                st.set_toast("Shader census finished without output.");
+                changed = true;
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => {}
         }
     }
 
@@ -2125,24 +2184,58 @@ unsafe fn on_timer(hwnd: HWND) {
         }
 
         let poll_res = if let Some(ref mut sess) = st.session {
-            if sess.kind == launcher::ProcessKind::Game && (!sess.window_branded || st.anim_tick % 10 == 0) {
-                let ico = Settings::app_dir().join("logo.ico");
-                if brand_runner_window(sess.child.id(), "Game Master 6", &ico, true) {
-                    sess.window_branded = true;
-                }
-                if !sess.window_maximized {
-                    let ok = if st.settings.borderless {
-                        make_runner_window_borderless_fullscreen(sess.child.id())
-                    } else {
-                        maximize_runner_window(sess.child.id())
-                    };
-                    if ok {
-                        sess.window_maximized = true;
+            let pid = sess.child.id();
+            if sess.kind == launcher::ProcessKind::Game {
+                let win_visible = unsafe { has_visible_window_for_pid(pid) };
+                if win_visible {
+                    if sess.window_seen_at.is_none() {
+                        sess.window_seen_at = Some(Instant::now());
+                    }
+                    sess.window_closed_at = None;
+                    if !sess.window_branded || st.anim_tick % 10 == 0 {
+                        let ico = Settings::app_dir().join("logo.ico");
+                        if unsafe { brand_runner_window(pid, "Game Master 6", &ico, true) } {
+                            sess.window_branded = true;
+                        }
+                    }
+                    if st.settings.borderless && sess.started_at.elapsed().as_secs() <= 90 {
+                        if sess.borderless_applied_at.is_none() {
+                            if unsafe { make_runner_window_borderless_fullscreen(pid) } {
+                                sess.borderless_applied_at = Some(Instant::now());
+                                sess.window_maximized = true;
+                            }
+                        } else if let Some(applied_at) = sess.borderless_applied_at {
+                            let secs_since = applied_at.elapsed().as_secs();
+                            if !sess.borderless_recheck_2s && secs_since >= 2 {
+                                unsafe {
+                                    let _ = make_runner_window_borderless_fullscreen(pid);
+                                }
+                                sess.borderless_recheck_2s = true;
+                            }
+                            if !sess.borderless_recheck_6s && secs_since >= 6 {
+                                unsafe {
+                                    let _ = make_runner_window_borderless_fullscreen(pid);
+                                }
+                                sess.borderless_recheck_6s = true;
+                            }
+                        }
+                    } else if !st.settings.borderless && !sess.window_maximized {
+                        if unsafe { maximize_runner_window(pid) } {
+                            sess.window_maximized = true;
+                        }
+                    }
+                } else if sess.window_seen_at.is_some() {
+                    if sess.window_closed_at.is_none() {
+                        sess.window_closed_at = Some(Instant::now());
+                    } else if let Some(closed_at) = sess.window_closed_at {
+                        if closed_at.elapsed().as_secs() >= 4 {
+                            launcher::stop(sess);
+                        }
                     }
                 }
             }
             if st.anim_tick % 6 == 0 {
-                st.proc_stats = monitor::sample_process(sess.child.id());
+                st.proc_stats = monitor::sample_process(pid);
             }
             Some(launcher::poll(sess))
         } else {
@@ -2450,7 +2543,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 census_rx: None,
                 last_crash: None,
                 dismissed_warning: None,
-                adv_collapsed: [false, false, false, false, true],
+                adv_collapsed: [false, false, false, false, false, true],
                 system_tip: (false, String::new()),
                 tip_rx: None,
                 last_tip_probe: Instant::now(),
@@ -3049,7 +3142,7 @@ unsafe fn dump_ui_tabs(out_dir: &std::path::Path) {
             census_running: false,
             last_crash: None,
             dismissed_warning: None,
-            adv_collapsed: [false, false, false, false, true],
+            adv_collapsed: [false, false, false, false, false, true],
             system_tip: &(false, String::new()),
             log_comparison: None,
             show_log_compare: false,

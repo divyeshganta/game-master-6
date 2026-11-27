@@ -416,6 +416,14 @@ extern "system" {
         process_information_size: DWORD,
     ) -> BOOL;
     pub fn CloseHandle(h_object: HANDLE) -> BOOL;
+    pub fn CreateJobObjectW(lp_job_attributes: *mut c_void, lp_name: *const u16) -> HANDLE;
+    pub fn SetInformationJobObject(
+        h_job: HANDLE,
+        job_object_information_class: DWORD,
+        lp_job_object_information: *const c_void,
+        cb_job_object_information_length: DWORD,
+    ) -> BOOL;
+    pub fn AssignProcessToJobObject(h_job: HANDLE, h_process: HANDLE) -> BOOL;
     pub fn LoadLibraryW(lp_lib_file_name: *const u16) -> HANDLE;
     pub fn GetProcAddress(h_module: HANDLE, lp_proc_name: *const u8) -> *mut c_void;
     pub fn GlobalAlloc(u_flags: UINT, dw_bytes: usize) -> HANDLE;
@@ -1720,4 +1728,112 @@ pub fn is_on_battery_power() -> bool {
         battery_full_life_time: 0,
     };
     unsafe { GetSystemPowerStatus(&mut sps) != 0 && sps.ac_line_status == 0 }
+}
+
+/// RAII wrapper around a Windows Job Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`.
+/// Dropping this handle (or closing Game Master 6) terminates the entire runner process tree.
+pub struct ProcessJob(HANDLE);
+
+unsafe impl Send for ProcessJob {}
+unsafe impl Sync for ProcessJob {}
+
+impl Drop for ProcessJob {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe {
+                let _ = CloseHandle(self.0);
+            }
+            self.0 = std::ptr::null_mut();
+        }
+    }
+}
+
+#[repr(C)]
+struct JOBOBJECT_BASIC_LIMIT_INFORMATION {
+    per_process_user_time_limit: i64,
+    per_job_user_time_limit: i64,
+    limit_flags: DWORD,
+    minimum_working_set_size: usize,
+    maximum_working_set_size: usize,
+    active_process_limit: DWORD,
+    affinity: usize,
+    priority_class: DWORD,
+    scheduling_class: DWORD,
+}
+
+#[repr(C)]
+struct IO_COUNTERS {
+    read_operation_count: u64,
+    write_operation_count: u64,
+    other_operation_count: u64,
+    read_transfer_count: u64,
+    write_transfer_count: u64,
+    other_transfer_count: u64,
+}
+
+#[repr(C)]
+struct JOBOBJECT_EXTENDED_LIMIT_INFORMATION {
+    basic_limit_information: JOBOBJECT_BASIC_LIMIT_INFORMATION,
+    io_info: IO_COUNTERS,
+    process_memory_limit: usize,
+    job_memory_limit: usize,
+    peak_process_memory_used: usize,
+    peak_job_memory_used: usize,
+}
+
+/// Creates a Windows Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` (0x2000).
+pub unsafe fn create_kill_on_close_job() -> Option<ProcessJob> {
+    const JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS: DWORD = 9;
+    const JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE: DWORD = 0x0000_2000;
+    let job = CreateJobObjectW(std::ptr::null_mut(), std::ptr::null());
+    if job.is_null() {
+        return None;
+    }
+    let mut info: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
+    info.basic_limit_information.limit_flags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    let ok = SetInformationJobObject(
+        job,
+        JOB_OBJECT_EXTENDED_LIMIT_INFORMATION_CLASS,
+        &info as *const _ as *const c_void,
+        std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as DWORD,
+    );
+    if ok == 0 {
+        let _ = CloseHandle(job);
+        return None;
+    }
+    Some(ProcessJob(job))
+}
+
+/// Assigns `pid` to `job` so closing `job` kills the process and its descendants.
+pub unsafe fn assign_pid_to_job(job: &ProcessJob, pid: u32) -> bool {
+    const PROCESS_SET_QUOTA: DWORD = 0x0100;
+    const PROCESS_TERMINATE: DWORD = 0x0001;
+    let h = OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, 0, pid);
+    if h.is_null() {
+        return false;
+    }
+    let ok = AssignProcessToJobObject(job.0, h) != 0;
+    let _ = CloseHandle(h);
+    ok
+}
+
+/// Returns true if `pid` currently owns at least one visible top-level window.
+pub unsafe fn has_visible_window_for_pid(pid: u32) -> bool {
+    struct Ctx {
+        pid: u32,
+        found: bool,
+    }
+    unsafe extern "system" fn enum_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let ctx = &mut *(lparam as *mut Ctx);
+        let mut wpid: DWORD = 0;
+        GetWindowThreadProcessId(hwnd, &mut wpid);
+        if wpid == ctx.pid && IsWindowVisible(hwnd) != 0 {
+            ctx.found = true;
+            return 0;
+        }
+        1
+    }
+    let mut ctx = Ctx { pid, found: false };
+    EnumWindows(Some(enum_cb), &mut ctx as *mut Ctx as LPARAM);
+    ctx.found
 }

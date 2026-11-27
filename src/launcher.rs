@@ -8,8 +8,9 @@ use crate::config::{split_args, Settings};
 use crate::diagnostics::{logs_dir, strip_ansi, SystemInfo};
 use crate::runners::cache_dir_for;
 use crate::win32::{
-    boost_process, kill_stray_runners, local_timestamp_filename, local_timestamp_human,
-    set_high_perf_gpu_preference, set_keep_awake, set_timer_1ms,
+    assign_pid_to_job, boost_process, create_kill_on_close_job, kill_stray_runners,
+    local_timestamp_filename, local_timestamp_human, set_high_perf_gpu_preference, set_keep_awake,
+    set_timer_1ms, ProcessJob,
 };
 
 fn is_ztrx_runner(path: &Path) -> bool {
@@ -219,6 +220,7 @@ pub struct LiveFrameTelemetry {
 pub struct ActiveSession {
     pub kind: ProcessKind,
     pub child: Child,
+    pub job: Option<ProcessJob>,
     pub log_path: PathBuf,
     pub started_at: Instant,
     pub log_offset: u64,
@@ -229,13 +231,19 @@ pub struct ActiveSession {
     pub live_telemetry: Option<LiveFrameTelemetry>,
     pub window_branded: bool,
     pub window_maximized: bool,
+    pub window_seen_at: Option<Instant>,
+    pub window_closed_at: Option<Instant>,
+    pub borderless_applied_at: Option<Instant>,
+    pub borderless_recheck_2s: bool,
+    pub borderless_recheck_6s: bool,
     pub cache_dir: PathBuf,
     pub initial_cache_files: usize,
 }
 
 impl ActiveSession {
-    /// Releases all session-scoped Win32 hooks (1ms timer and KeepAwake execution state).
+    /// Releases all session-scoped Win32 hooks (1ms timer, KeepAwake, and Job Object).
     pub fn release_session_hooks(&mut self) {
+        self.job.take();
         if self.timer_active {
             unsafe {
                 set_timer_1ms(false);
@@ -292,8 +300,11 @@ fn validate_core(s: &Settings) -> Result<(), String> {
 pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
     validate_core(s)?;
 
-    if s.auto_clean_strays {
-        let _ = kill_stray_runners();
+    // Automatic pre-launch stray cleanup: terminate any orphan victory.exe and wait 1s
+    // so the new launch never fights a ghost process for VRAM.
+    let killed = kill_stray_runners();
+    if killed > 0 {
+        std::thread::sleep(std::time::Duration::from_secs(1));
     }
 
     let log_dir = logs_dir();
@@ -474,6 +485,14 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
         .spawn()
         .map_err(|e| format!("Failed to start runner '{}': {e}", runner_path.display()))?;
 
+    let job = unsafe {
+        let j = create_kill_on_close_job();
+        if let Some(ref job_obj) = j {
+            let _ = assign_pid_to_job(job_obj, child.id());
+        }
+        j
+    };
+
     if s.high_priority {
         unsafe {
             boost_process(child.id());
@@ -495,6 +514,7 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
     Ok(ActiveSession {
         kind: ProcessKind::Game,
         child,
+        job,
         log_path,
         started_at: Instant::now(),
         log_offset: initial_offset,
@@ -505,6 +525,11 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
         live_telemetry: None,
         window_branded: false,
         window_maximized: false,
+        window_seen_at: None,
+        window_closed_at: None,
+        borderless_applied_at: None,
+        borderless_recheck_2s: false,
+        borderless_recheck_6s: false,
         cache_dir: cache_dir_for(&runner_path, kind, s.isolated_cache),
         initial_cache_files: 0,
     })
@@ -683,9 +708,18 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
         .spawn()
         .map_err(|e| format!("Failed to start shader preparation: {e}"))?;
 
+    let job = unsafe {
+        let j = create_kill_on_close_job();
+        if let Some(ref job_obj) = j {
+            let _ = assign_pid_to_job(job_obj, child.id());
+        }
+        j
+    };
+
     Ok(ActiveSession {
         kind: ProcessKind::Prepare,
         child,
+        job,
         log_path,
         started_at: Instant::now(),
         log_offset: initial_offset,
@@ -700,6 +734,11 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
         live_telemetry: None,
         window_branded: false,
         window_maximized: false,
+        window_seen_at: None,
+        window_closed_at: None,
+        borderless_applied_at: None,
+        borderless_recheck_2s: false,
+        borderless_recheck_6s: false,
         cache_dir,
         initial_cache_files,
     })
@@ -772,9 +811,11 @@ pub fn poll(session: &mut ActiveSession) -> PollUpdate {
 }
 
 pub fn stop(session: &mut ActiveSession) {
+    session.job.take();
     let _ = session.child.kill();
     let _ = session.child.wait();
     session.release_session_hooks();
+    let _ = kill_stray_runners();
 }
 
 /// Parses ztrx / VIctory live frame telemetry lines such as:
@@ -1018,18 +1059,93 @@ pub fn resolve_victory_launch_env(
             set("VICTORY_DATA_DIR", vault.to_string_lossy().into_owned());
         }
         set("VICTORY_HOST_WAVE", "32".into());
+
+        // Required so Streamline DLSS Frame Generation stays ON
+        set("VICTORY_ASYNC_SUBMIT", "1".into());
+        set("VICTORY_THIN", "1".into());
+        set("VICTORY_JOIN_PARTS", "8".into());
+        set("VICTORY_RELAY", "2".into());
+        set("VICTORY_RELAY_COPY", "1".into());
+        set("VICTORY_WIDE_BACK", "1".into());
+        set("VICTORY_CARD_REHASH_RUNS", "1".into());
+        set("VICTORY_JOIN_COPIES", "1".into());
+        set("VICTORY_CARD_STEPS", "2".into());
+        set("VICTORY_CARD_AWAKE", "1".into());
+        set("VICTORY_CARD_BUFFERS_MIN_KB", "64".into());
+        set("VICTORY_INDIRECT_WINDOW", "1".into());
+        set("VICTORY_INDIRECT_BATCH", "2".into());
+        set("VICTORY_UPLOAD_AHEAD", "1".into());
+        set("VICTORY_SHOW_AFTER", "1".into());
+        set("VICTORY_MAP_THREADS", "1".into());
+        set("VICTORY_HEAP_SYNC_FIRST", "1".into());
+        set("VICTORY_SYNC_IN_PLACE", "1".into());
+        set("VICTORY_SPANS_QUICK", "1".into());
+        set("VICTORY_SYNC_FINE", "1".into());
+        set("VICTORY_HEAP_SYNC_AT_SUBMIT", "1".into());
+
+        // Texture & pipeline defaults
+        set("VICTORY_TEXTURE_POOL", "1".into());
+        set("VICTORY_RIPE_BLOCKS", "0".into());
+        set("VICTORY_TEXTURE_NO_WAIT", "1".into());
+        set("VICTORY_TEXTURE_CATCHUP", "0".into());
+        set("VICTORY_TEXTURE_STAGE_MS", "16".into());
+        set("VICTORY_LEVELS_ON_DEMAND", "0".into());
+        set("VICTORY_PRELUDE_UPLOADS", "1".into());
+        set("VICTORY_SHOW_NEW_LATER", "1".into());
+        set("VICTORY_POOL_SMALL", "0".into());
+        set("VICTORY_TABLED_REREAD", "1".into());
+        set("VICTORY_QUEUE_HOST_TEXTURES", "0".into());
+        set("VICTORY_PIPELINE_BOOK", "1".into());
+
+        // 4 fast F1 speed switches ON by default; water light & RT OFF
+        set("VICTORY_LEAVE_OUT", "02384a60fda6f2d0,731a39171b568298".into());
+        set("VICTORY_EARLY_DEPTH", "1".into());
+        set("VICTORY_WC_NO_BACK", "1".into());
+        set("VICTORY_WC_NO_BACK_MIN_KB", "1024".into());
+        set("VICTORY_SOFT_VIEWS", "copies".into());
+        set("VICTORY_AMBIENT", "0.8".into());
+        set("VICTORY_AMBIENT_AIR", "1.5".into());
+        set("VICTORY_AMBIENT_SPECULAR", "1".into());
+        set("VICTORY_BVH_BUILDER", "0".into());
+
+        // Memory-safe idle trimming
+        set("VICTORY_LIST_IDLE_TRIM_S", "5".into());
+        set("VICTORY_STAGING_IDLE_MS", "2000".into());
+        set("VICTORY_WINDOW_IDLE_MS", "2000".into());
+
+        // ALWAYS 1440p on <=16 GB GPUs (never 4K 3840x2160)
         let native_1440 = (s.console_model.eq_ignore_ascii_case("series-x") && (sys.vram_gb <= 16.5))
             || s.display_mode.trim() == "2560x1440";
         set("VICTORY_NATIVE_1440P", if native_1440 { "1" } else { "0" }.into());
+        set("VICTORY_MENU_RES", if native_1440 { "1440" } else if s.display_mode.trim() == "1920x1080" { "1080" } else { "1440" }.into());
+
+        // Uncapped FPS by default (1000 = NONE in F1 menu; never 20 FPS / 50000 us)
+        set("VICTORY_MENU_FPS", "1000".into());
+        set("VICTORY_FRAME_INTERVAL_US", "1000".into());
+
         let tex_room = if s.texture_room_percent.trim().is_empty() {
-            "75".to_string()
+            if sys.vram_gb <= 8.5 { "72" } else if sys.vram_gb <= 13.5 { "75" } else { "80" }
         } else {
-            s.texture_room_percent.trim().to_string()
+            s.texture_room_percent.trim()
         };
-        set("VICTORY_TEXTURE_ROOM_PERCENT", tex_room);
-        set("VICTORY_BVH_BUILDER", "0".into());
+        set("VICTORY_TEXTURE_ROOM_PERCENT", tex_room.to_string());
+
+        // Native FULLSCREEN (NO BORDER) = ON when Borderless Fullscreen is selected
+        set("VICTORY_FULLSCREEN", if s.borderless { "1" } else { "0" }.into());
         set("VICTORY_BORDERLESS", if s.borderless { "1" } else { "0" }.into());
         set("VICTORY_LOG", s.effective_victory_log().to_string());
+
+        // DLSS & Frame Gen from Settings
+        let dlss_m = s.dlss_mode.trim().to_ascii_lowercase();
+        let dlss_active = !dlss_m.is_empty() && dlss_m != "off";
+        let fg_x = if dlss_active { s.framegen_x.clamp(0, 6) } else { 0 };
+        set("VICTORY_MENU_CONSOLE", s.console_model.clone());
+        set("VICTORY_DLSS", if dlss_active { "1" } else { "0" }.into());
+        set("VICTORY_DLSS_MODE", if dlss_active { dlss_m.clone() } else { "off".into() });
+        set("VICTORY_MENU_DLSS", if dlss_active { dlss_m } else { "off".into() });
+        set("VICTORY_FRAMEGEN", if fg_x > 0 { "1" } else { "0" }.into());
+        set("VICTORY_FRAMEGEN_X", fg_x.to_string());
+        set("VICTORY_MENU_FRAMEGEN", fg_x.to_string());
 
         if let Some(prof) = crate::runners::load_runner_profile(runner_path) {
             for (k, v) in prof.env {
@@ -1122,12 +1238,50 @@ mod tests {
         // Must NOT inject cool_fox memory/relay flags into Streamline runners
         assert_eq!(get("VICTORY_CARD_ROOM_FOR_TARGETS_MB"), None);
         assert_eq!(get("VICTORY_CARD_BUFFERS_MB"), None);
-        assert_eq!(get("VICTORY_RELAY"), None);
-        assert_eq!(get("VICTORY_CARD_STEPS"), None);
         assert_eq!(get("VICTORY_PORT_GUARD"), None);
+        assert_eq!(get("VICTORY_ASYNC_SUBMIT"), Some("1"));
+        assert_eq!(get("VICTORY_FULLSCREEN"), Some("1"));
+        assert_eq!(get("VICTORY_EARLY_DEPTH"), Some("1"));
+        assert_eq!(get("VICTORY_WC_NO_BACK"), Some("1"));
+        assert_eq!(get("VICTORY_SOFT_VIEWS"), Some("copies"));
         if let Some(vault) = crate::saves::shared_save_vault_dir() {
             assert_eq!(get("VICTORY_DATA_DIR"), Some(vault.to_string_lossy().as_ref()));
         }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn balanced_victory_nvidia_env_has_required_flags_and_no_stale_caps() {
+        let tmp = std::env::temp_dir().join(format!("gm6_v15_bal_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let exe = tmp.join("victory.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        std::fs::write(tmp.join("sl.interposer.dll"), b"DLL").unwrap();
+
+        let mut s = Settings::default();
+        s.runner = exe.to_string_lossy().into_owned();
+        s.game_dir = r"D:\TestGame".into();
+        s.borderless = true;
+        let mut sys = SystemInfo::default();
+        sys.vram_gb = 12.0;
+        sys.gpu_arch = crate::diagnostics::GpuArch::NvidiaBlackwell;
+
+        let _ = crate::presets::apply_adaptive_preset(&mut s, crate::presets::PresetKind::Balanced, &sys);
+        let env = resolve_victory_launch_env(&s, &exe, crate::runners::RunnerKind::Victory, &sys);
+        let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
+
+        assert_eq!(get("VICTORY_ASYNC_SUBMIT"), Some("1"));
+        assert_eq!(get("VICTORY_NATIVE_1440P"), Some("1"));
+        assert_eq!(get("VICTORY_MENU_RES"), Some("1440"));
+        assert_eq!(get("VICTORY_FULLSCREEN"), Some("1"));
+        assert_eq!(get("VICTORY_MENU_FPS"), Some("1000"));
+        assert_eq!(get("VICTORY_FRAME_INTERVAL_US"), Some("1000"));
+        assert_ne!(get("VICTORY_MENU_FPS"), Some("20"));
+        assert_ne!(get("VICTORY_FRAME_INTERVAL_US"), Some("50000"));
+        assert_eq!(get("VICTORY_CARD_ROOM_FOR_TARGETS_MB"), None);
+        assert_eq!(get("VICTORY_CARD_BUFFERS_MB"), None);
 
         let _ = std::fs::remove_dir_all(&tmp);
     }
