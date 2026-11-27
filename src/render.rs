@@ -98,6 +98,10 @@ pub enum Target {
     UpdateRunner(usize),
     FetchNvidiaSdks(usize),
     DeleteRunner(usize),
+    ShowShortcuts,
+    CloseShortcuts,
+    CycleDlssMode,
+    CycleFrameGen,
     ToggleSkipShader(usize),
     ClearSkipShaders,
     ShowKeymap,
@@ -438,6 +442,7 @@ pub struct RenderContext<'a> {
     pub auto_doctor: Option<&'a crate::telemetry::AutoDoctorReport>,
     pub cache_hash_mismatch: bool,
     pub beats_baseline: bool,
+    pub show_shortcuts: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -759,8 +764,7 @@ fn apply_theme_json_overlay(mut pal: ThemePalette) -> ThemePalette {
 
 pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(RECT, Target)> {
     let mut hits = Vec::with_capacity(64);
-    let mut pal = theme_palette(&ctx.settings.theme);
-    let _ = &mut pal;
+    let pal = theme_palette(&ctx.settings.theme);
 
     // 1. Theme-aware Background gradient
     fill_gradient(hdc, RECT::new(0, 0, w, h), pal.bg_l, pal.bg_r, false);
@@ -823,7 +827,7 @@ pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(R
     );
     draw_text(
         hdc,
-        "v1.3",
+        "v1.4",
         RECT::new(20, h - 40, 104, h - 20),
         ctx.fonts.small_bold,
         COL_DIM,
@@ -848,14 +852,20 @@ pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(R
         DT_LEFT | DT_VCENTER | DT_SINGLELINE,
     );
     let sub_max_r = if main_r - main_l > 820 { main_r - 556 } else { main_r - 336 };
+    let dlss_active_runner = crate::runners::has_dlss_dlls_beside(&ctx.settings.resolved_runner());
+    let active_runner_tag = if dlss_active_runner {
+        "DLSS + FG READY".to_string()
+    } else {
+        runner_badge(ctx.settings).to_string()
+    };
     let phase_txt = if ctx.audit.shader_cache_ready {
-        format!("CACHE READY · {}", runner_badge(ctx.settings))
+        format!("CACHE READY · {active_runner_tag}")
     } else if ctx.shader_census.total > 0 {
         format!("{}/{} SHADER TRANSLATED", ctx.shader_census.translated, ctx.shader_census.total)
     } else {
         "CACHE NOT PREPARED".into()
     };
-    let header_sub = format!("v1.3 · {phase_txt}");
+    let header_sub = format!("v1.4 · {phase_txt}");
     draw_text(
         hdc,
         &header_sub,
@@ -881,7 +891,9 @@ pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(R
             "B" => (COL_CYAN_BG, COL_CYAN, COL_CYAN),
             _ => (COL_AMBER_BG, COL_AMBER, COL_AMBER),
         };
-        let pf_r = RECT::new(main_r - 192, 22, main_r, 58);
+        let help_r = RECT::new(main_r - 36, 22, main_r, 58);
+        draw_button(hdc, help_r, "?", ctx.fonts.body_bold, ctx.hover == Target::ShowShortcuts, COL_CYAN, Target::ShowShortcuts, &mut hits);
+        let pf_r = RECT::new(help_r.left - 200, 22, help_r.left - 8, 58);
         draw_pill(hdc, pf_r, &pf.summary, ctx.fonts.small_bold, pf_bg, pf_fg, pf_bd);
     }
     if ctx.view != 0 {
@@ -952,11 +964,78 @@ pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(R
 
     // 6. Bottom Dock (Left: Live Console/Telemetry Strip | Right: Launch Command Deck)
     if ctx.view != 0 {
-        let dock_rect = RECT::new(main_l, dock_t, main_r, h - 14);
+        let dock_rect = RECT::new(main_l, dock_t, main_r, h - 22);
         draw_dock(hdc, dock_rect, ctx, &mut hits);
     }
 
+    // Live Hover Hint Bar (1-line plain-English explanation of hovered control)
+    if let Some(hint) = hover_hint_text(ctx.hover) {
+        let hint_r = RECT::new(main_l, h - 20, main_r, h - 2);
+        draw_text(hdc, hint, hint_r, ctx.fonts.small, COL_CYAN, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    }
+
+    // '?' Shortcuts & Controls Overlay
+    if ctx.show_shortcuts {
+        draw_shortcuts_overlay(hdc, w, h, ctx, &mut hits);
+    }
+
     hits
+}
+
+fn hover_hint_text(target: Target) -> Option<&'static str> {
+    match target {
+        Target::None => None,
+        Target::Prepare => Some("PREPARE CACHE: Pre-translates shaders (--jobs) and pre-warms GPU pipelines so gameplay has zero compile stutter."),
+        Target::LaunchOrStop => Some("LAUNCH: Starts the active runner with synced settings, shared save vault, and automatic DLSS/Streamline wiring."),
+        Target::ApplyPreset(2) => Some("LOW PRESET: 1280x720, DLSS Balanced, lowest VRAM footprint (78% tex room on 6 GB) for maximum headroom."),
+        Target::ApplyPreset(1) => Some("BALANCED PRESET: Recommended sweet spot (1080p, DLSS Quality, 3x FG / 20 FPS base cap on 12 GB for smooth 60 FPS)."),
+        Target::ApplyPreset(0) => Some("HIGH PRESET: Native 2560x1440 Series X fidelity with DLSS Quality + Frame Generation."),
+        Target::CycleDlssMode => Some("DLSS MODE: Cycles Super Resolution (OFF -> Performance -> Balanced -> Quality) and syncs victory-settings.txt."),
+        Target::CycleFrameGen => Some("FRAME GEN: Cycles NVIDIA DLSS Frame Generation (OFF -> 2x on RTX 40, up to 6x on RTX 50) & reserves VRAM room."),
+        Target::CycleDisplayMode => Some("DISPLAY: Cycles output resolution (1280x720 / 1920x1080 / 2560x1440 / 4K) and syncs victory-settings.txt."),
+        Target::ToggleBorderless => Some("BORDERLESS: Toggles borderless fullscreen vs windowed mode."),
+        Target::ToggleConsoleQuick => Some("CONSOLE PROFILE: Switches Series S (720p internal, faster) vs Series X (1440p internal, sharper)."),
+        Target::CycleHomeRunner => Some("PRIMARY RUNNER: Cycles your active #1 runner. Manage/update/build runners in the Runners tab."),
+        Target::PinBaseline => Some("PIN BASELINE: Locks your current runner & settings as a safe reference point for ROLLBACK."),
+        Target::RollbackBaseline => Some("ROLLBACK: Restores your pinned baseline runner & settings."),
+        Target::CycleKeymapPreset => Some("KEYS: Cycles keyboard-to-controller stand-in layout (Open-World / FPS / Left-Handed / Pad-Only)."),
+        Target::CycleHudMode => Some("HUD: Cycles the F9 click-through Game Master overlay density (Compact / Standard / Minimal)."),
+        Target::ToggleZeroOverhead => Some("MIN ON PLAY: Minimizes Game Master while the game runs to free CPU & VRAM."),
+        Target::ShowShortcuts => Some("SHORTCUTS (?): View F1 DLSS/FG menu, F3 live stats, F9 HUD, Alt+Enter fullscreen, Win+P & controls."),
+        Target::UpdateRunner(_) => Some("UPDATE: Backs up victory.exe, pulls latest git commits, rebuilds release, and updates shader/pipeline cache."),
+        Target::RollbackRunner(_) => Some("ROLLBACK: Restores the previous victory.exe.bak binary for this runner."),
+        Target::FetchNvidiaSdks(_) => Some("GET DLSS: Explicitly downloads official signed NVIDIA Streamline & DLSS DLLs from github.com/NVIDIA-RTX/Streamline."),
+        _ => None,
+    }
+}
+
+unsafe fn draw_shortcuts_overlay(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext, hits: &mut Vec<(RECT, Target)>) {
+    let ow = 560.min(w - 80);
+    let oh = 360.min(h - 80);
+    let ox = (w - ow) / 2;
+    let oy = (h - oh) / 2;
+    let card = RECT::new(ox, oy, ox + ow, oy + oh);
+    rounded_rect(hdc, card, COL_SIDEBAR, COL_CYAN, 16);
+    draw_text(hdc, "SHORTCUTS & IN-GAME CONTROLS", RECT::new(card.left + 20, card.top + 14, card.right - 100, card.top + 38), ctx.fonts.body_bold, COL_CYAN, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    let close_r = RECT::new(card.right - 92, card.top + 12, card.right - 16, card.top + 38);
+    draw_button(hdc, close_r, "CLOSE", ctx.fonts.small_bold, ctx.hover == Target::CloseShortcuts, COL_CORAL, Target::CloseShortcuts, hits);
+
+    let rows = [
+        ("F1 (In-Game)", "Open DLSS / 2x-6x Frame Gen / FPS Cap menu (Arrow keys + Enter)"),
+        ("F3 (In-Game)", "Toggle live FPS, Frame Gen output, draw calls, RAM & VRAM overlay"),
+        ("F9 (Global)", "Toggle Game Master click-through HUD overlay"),
+        ("Alt + Enter", "Toggle fullscreen / windowed"),
+        ("Win + P", "Switch to PC Screen Only (frees multi-monitor VRAM overhead)"),
+        ("Keyboard -> Pad", "WASD: Move | Enter: A | Esc: B | Shift: Sprint | Space: Jump"),
+    ];
+    let mut y = card.top + 56;
+    for (k, desc) in rows {
+        let rr = RECT::new(card.left + 20, y, card.right - 20, y + 40);
+        rounded_rect(hdc, rr, COL_PANEL, COL_BORDER, 8);
+        draw_text(hdc, k, RECT::new(rr.left + 12, rr.top, rr.left + 150, rr.bottom), ctx.fonts.small_bold, COL_EMERALD, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        draw_text(hdc, desc, RECT::new(rr.left + 156, rr.top, rr.right - 10, rr.bottom), ctx.fonts.small, COL_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        y += 46;
+    }
 }
 
 unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT, Target)>) {
@@ -978,17 +1057,22 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
 
     let tx = hero_r.left + 28;
     let tw = (hero_r.width() - 260).max(280);
+    let active_tag = if crate::runners::has_dlss_dlls_beside(&ctx.settings.resolved_runner()) {
+        "DLSS + FG READY"
+    } else {
+        ctx.settings.active_runner_kind().badge()
+    };
     let gpu_eyebrow = if ctx.sys.gpu_name.is_empty() {
-        format!("DETECTING GPU  ·  {}  ·  v1.3", ctx.settings.active_runner_kind().badge())
+        format!("DETECTING GPU  ·  {}  ·  v1.4", active_tag)
     } else if ctx.sys.vram_gb > 0.5 {
         format!(
             "{}  ·  {:.0} GB VRAM  ·  {}",
             ctx.sys.gpu_name.to_ascii_uppercase(),
             ctx.sys.vram_gb,
-            ctx.settings.active_runner_kind().badge()
+            active_tag
         )
     } else {
-        format!("{}  ·  {}", ctx.sys.gpu_name.to_ascii_uppercase(), ctx.settings.active_runner_kind().badge())
+        format!("{}  ·  {}", ctx.sys.gpu_name.to_ascii_uppercase(), active_tag)
     };
     draw_text(
         hdc,
@@ -1097,15 +1181,27 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     let col_gap = 16;
     let col_w = (r.width() - col_gap * 2) / 3;
 
-    // 1. Runner Profile + Import Runner...
+    // 1. Primary Runner + DLSS / FG Quick-Cycle Pills
     let run_r = RECT::new(r.left, ctl_y, r.left + col_w, ctl_y + ctl_h);
     rounded_rect(hdc, run_r, COL_PANEL, COL_BORDER, 14);
-    draw_text(hdc, "RUNNER PROFILE", RECT::new(run_r.left + 16, run_r.top + 12, run_r.right - 16, run_r.top + 32), ctx.fonts.small_bold, COL_CYAN, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    let r_name = ctx.settings.resolved_runner().parent().and_then(|p| p.file_name()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "ztrx".into());
+    let has_dlss = crate::runners::has_dlss_dlls_beside(&ctx.settings.resolved_runner());
+    let rp_hdr = if has_dlss { "PRIMARY RUNNER · DLSS + FG" } else { "PRIMARY RUNNER" };
+    draw_text(hdc, rp_hdr, RECT::new(run_r.left + 16, run_r.top + 12, run_r.right - 16, run_r.top + 32), ctx.fonts.small_bold, if has_dlss { COL_EMERALD } else { COL_CYAN }, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    let r_name = ctx.settings.resolved_runner().parent().and_then(|p| p.file_name()).map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| "victory".into());
     let cyc_r = RECT::new(run_r.left + 16, run_r.top + 38, run_r.right - 16, run_r.top + 78);
     draw_button(hdc, cyc_r, &format!("{} ({} found)", r_name, ctx.runners.len().max(1)), ctx.fonts.body_bold, ctx.hover == Target::CycleHomeRunner, COL_CYAN, Target::CycleHomeRunner, hits);
-    let imp_r = RECT::new(run_r.left + 16, run_r.top + 86, run_r.right - 16, run_r.bottom - 14);
-    draw_button(hdc, imp_r, "IMPORT RUNNER...", ctx.fonts.small_bold, ctx.hover == Target::ImportRunner, COL_ORANGE, Target::ImportRunner, hits);
+    if has_dlss {
+        let half_w = (run_r.width() - 40) / 2;
+        let dlss_r = RECT::new(run_r.left + 16, run_r.top + 86, run_r.left + 16 + half_w, run_r.bottom - 14);
+        let fg_r = RECT::new(dlss_r.right + 8, run_r.top + 86, run_r.right - 16, run_r.bottom - 14);
+        let dlss_col = if ctx.settings.dlss_mode == "off" { COL_MUTED } else { COL_EMERALD };
+        let fg_col = if ctx.settings.framegen_x == 0 || ctx.settings.dlss_mode == "off" { COL_MUTED } else { COL_CYAN };
+        draw_button(hdc, dlss_r, ctx.settings.dlss_mode_label(), ctx.fonts.small_bold, ctx.hover == Target::CycleDlssMode, dlss_col, Target::CycleDlssMode, hits);
+        draw_button(hdc, fg_r, &ctx.settings.framegen_label(), ctx.fonts.small_bold, ctx.hover == Target::CycleFrameGen, fg_col, Target::CycleFrameGen, hits);
+    } else {
+        let imp_r = RECT::new(run_r.left + 16, run_r.top + 86, run_r.right - 16, run_r.bottom - 14);
+        draw_button(hdc, imp_r, "MANAGE IN RUNNERS TAB...", ctx.fonts.small_bold, ctx.hover == Target::Nav(1), COL_ORANGE, Target::Nav(1), hits);
+    }
 
     // 2. Display (Resolution + Borderless/Windowed)
     let disp_r = RECT::new(r.left + col_w + col_gap, ctl_y, r.left + col_w * 2 + col_gap, ctl_y + ctl_h);
@@ -1221,9 +1317,14 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     } else {
         "▶  LAUNCH Game Master 6".into()
     };
+    let play_badge = if crate::runners::has_dlss_dlls_beside(&ctx.settings.resolved_runner()) {
+        "DLSS + FG READY"
+    } else {
+        ctx.settings.active_runner_kind().badge()
+    };
     let play_sub = format!(
         "{}  ·  {}  ·  {}  ·  {}",
-        ctx.settings.active_runner_kind().badge(),
+        play_badge,
         ctx.settings.console_model.to_ascii_uppercase(),
         ctx.settings.display_mode_label(),
         if ctx.settings.borderless { "BORDERLESS" } else { "WINDOWED" }

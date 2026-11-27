@@ -98,6 +98,7 @@ struct AppState {
     auto_doctor: Option<telemetry::AutoDoctorReport>,
     cache_hash_mismatch: bool,
     beats_baseline: bool,
+    show_shortcuts: bool,
 }
 
 impl AppState {
@@ -1431,7 +1432,38 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         Target::ToggleConsoleQuick => {
             let next_s = !st.settings.is_series_s();
             st.settings.console_model = if next_s { "series-s".into() } else { "series-x".into() };
+            let _ = crate::runners::sync_to_victory_settings(&st.settings, &st.settings.resolved_runner());
             st.save_settings(if next_s { "Switched to Xbox Series S mode" } else { "Switched to Xbox Series X mode" });
+            redraw(hwnd);
+        }
+        Target::ShowShortcuts => {
+            st.show_shortcuts = !st.show_shortcuts;
+            redraw(hwnd);
+        }
+        Target::CloseShortcuts => {
+            st.show_shortcuts = false;
+            redraw(hwnd);
+        }
+        Target::CycleDlssMode => {
+            st.settings.cycle_dlss_mode();
+            let _ = crate::runners::sync_to_victory_settings(&st.settings, &st.settings.resolved_runner());
+            let lbl = st.settings.dlss_mode_label().to_string();
+            st.save_settings(&format!("Synced {lbl} -> victory-settings.txt"));
+            redraw(hwnd);
+        }
+        Target::CycleFrameGen => {
+            let max_x = match st.sys.gpu_arch {
+                crate::diagnostics::GpuArch::NvidiaBlackwell => 6,
+                crate::diagnostics::GpuArch::NvidiaAdaAmpere => 2,
+                _ => 2,
+            };
+            st.settings.cycle_framegen_x(max_x);
+            if st.settings.framegen_x > 0 && st.sys.vram_gb > 0.5 && st.sys.vram_gb <= 13.5 {
+                st.settings.texture_room_percent = "80".into();
+            }
+            let _ = crate::runners::sync_to_victory_settings(&st.settings, &st.settings.resolved_runner());
+            let lbl = st.settings.framegen_label();
+            st.save_settings(&format!("Synced {lbl} -> victory-settings.txt"));
             redraw(hwnd);
         }
         Target::ToggleHudOverlay => {
@@ -1833,6 +1865,8 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
                 let next = &st.runners[(idx + 1) % st.runners.len()];
                 st.settings.runner = next.path.to_string_lossy().to_string();
                 st.settings.runner_kind = next.kind.id().into();
+                let rp = st.settings.resolved_runner();
+                let _ = crate::runners::sync_from_victory_settings(&mut st.settings, &rp);
                 st.save_settings(&format!("Selected runner: {}", next.name));
                 redraw(hwnd);
             }
@@ -1872,6 +1906,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             };
             st.settings.display_mode = next.into();
             st.settings.display_1080p = next == "1920x1080";
+            let _ = crate::runners::sync_to_victory_settings(&st.settings, &st.settings.resolved_runner());
             st.save_settings(&format!("Display resolution set to {}", st.settings.display_mode_label()));
             redraw(hwnd);
         }
@@ -2090,7 +2125,7 @@ unsafe fn on_timer(hwnd: HWND) {
         let poll_res = if let Some(ref mut sess) = st.session {
             if sess.kind == launcher::ProcessKind::Game && (!sess.window_branded || st.anim_tick % 10 == 0) {
                 let ico = Settings::app_dir().join("logo.ico");
-                if brand_runner_window(sess.child.id(), "Game Master 6 Title", &ico, true) {
+                if brand_runner_window(sess.child.id(), "Game Master 6", &ico, true) {
                     sess.window_branded = true;
                 }
                 if !sess.window_maximized {
@@ -2234,6 +2269,8 @@ unsafe fn on_timer(hwnd: HWND) {
                     let base_fps = st.runner_benches.first().map(|b| b.avg_fps).unwrap_or(0.0);
                     st.beats_baseline = telemetry::benchmark_beats_baseline(doc.avg_fps, base_fps, crashed);
                     st.auto_doctor = Some(doc);
+                    let rp = st.settings.resolved_runner();
+                    let _ = crate::runners::sync_from_victory_settings(&mut st.settings, &rp);
                 }
                 let (p_secs, p_cnt) = telemetry::total_playtime_summary();
                 st.playtime_label = format!("PLAYTIME {} ({} RUNS)", telemetry::format_playtime(p_secs), p_cnt);
@@ -2428,7 +2465,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 auto_doctor: None,
                 cache_hash_mismatch: false,
                 beats_baseline: false,
+                show_shortcuts: false,
             });
+            let rp = st.settings.resolved_runner();
+            let _ = crate::runners::sync_from_victory_settings(&mut st.settings, &rp);
             st.cache_hash_mismatch = crate::runners::check_cache_hash_mismatch(
                 &st.settings.resolved_runner(),
                 &cache_dir_for(
@@ -2536,6 +2576,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 auto_doctor: st.auto_doctor.as_ref(),
                 cache_hash_mismatch: st.cache_hash_mismatch,
                 beats_baseline: st.beats_baseline,
+                show_shortcuts: st.show_shortcuts,
             };
             st.hits = paint(mem, w, h, &ctx);
 
@@ -2792,7 +2833,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
 
 pub fn run() {
     std::panic::set_hook(Box::new(|info| {
-        let text = format!("Game Master v1.3 error:\n\n{info}");
+        let text = format!("Game Master v1.4 error:\n\n{info}");
         let dir = Settings::app_dir().join("logs");
         let _ = std::fs::create_dir_all(&dir);
         let _ = std::fs::write(dir.join("crash.txt"), &text);
@@ -2816,7 +2857,7 @@ pub fn run() {
         }
 
         let class = wide("GameMaster6Class");
-        let title = wide("Game Master 6 v1.3");
+        let title = wide("Game Master 6 v1.4");
         let hinst = GetModuleHandleW(std::ptr::null());
         let wc = WNDCLASSEXW {
             cb_size: std::mem::size_of::<WNDCLASSEXW>() as UINT,
@@ -3017,6 +3058,7 @@ unsafe fn dump_ui_tabs(out_dir: &std::path::Path) {
             auto_doctor: None,
             cache_hash_mismatch: false,
             beats_baseline: false,
+            show_shortcuts: false,
         };
         let _ = paint(mem, w, h, &ctx);
         let px_bytes = (w as usize) * (h as usize) * 4;

@@ -2,14 +2,14 @@
 
 <img src="assets/banner.png" alt="Game Master 6 Banner" width="100%" />
 
-# Game Master 6 (v1.3.0)
+# Game Master 6 (v1.4.0)
 
 **A lightweight, zero-dependency Windows GUI launcher, hardware-adaptive VRAM preset manager, and live system telemetry frontend for `victory.exe` compatibility runners.**
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-00e5ff?style=for-the-badge&logo=windows)](https://github.com)
 [![Built with](https://img.shields.io/badge/Built%20with-Rust%20%2B%20Win32%20GDI-ff2e93?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-GPL--3.0-22c55e?style=for-the-badge)](LICENSE)
-[![Latest Release](https://img.shields.io/badge/Release-v1.3.0-f59e0b?style=for-the-badge)](GameMaster6-v1.3-Release.zip)
+[![Latest Release](https://img.shields.io/badge/Release-v1.4.0-f59e0b?style=for-the-badge)](GameMaster6-v1.4-Release.zip)
 
 </div>
 
@@ -17,7 +17,11 @@
 
 ---
 
-## What's New in v1.3.0
+## What's New in v1.4.0
+
+- **Focused Primary-Runner Play UI**: Play stays laser-focused on your #1 active runner (showing `DLSS + FG READY` and quick-cycle `DLSS` & `FG` pills when Streamline/DLSS DLLs are present), while secondary runner management (`BUILD FROM URL`, `UPDATE`, `ROLLBACK`, `IMPORT`) lives cleanly in the `Runners` tab.
+- **True Two-Way Sync with `victory-settings.txt`**: Reads `victory-settings.txt` on startup, runner switch, and game exit so the Play UI always reflects what will launch—and clicking `LOW` / `BALANCED` / `HIGH` / `DISPLAY` / `SERIES-S/X` / `DLSS` / `FG` immediately writes those keys back while preserving unrelated settings.
+- **Live Hover Hint Bar & `?` Shortcuts Guide**: Hovering any button, pill, or preset shows a plain-English explanation at the bottom of the window, and the `?` button in the header opens a quick-reference overlay (`F1`, `F3`, `F9`, `Alt+Enter`, `Win+P`, and keyboard-to-pad controls).
 
 - **Shared Save Vault + Isolated Shader Caches**: All runners share one persistent save directory (`VICTORY_DATA_DIR`, defaulting to `%LOCALAPPDATA%\victory\data`) with rolling 5-slot ZIP backups before launch, while shader/pipeline caches stay strictly isolated per runner (`caches\<runner_id>\`) with SHA-256 `.runner_hash` tracking.
 - **1-Click Runner `UPDATE` + `ROLLBACK`**: Source-built runners store `runner-meta.json` (git URL, branch, commit) and expose 1-click `UPDATE` (backs up `.exe`, `git pull`, `cargo build --release`, updates `.runner_hash`, runs `shaders` + `warm`) and `ROLLBACK`.
@@ -44,7 +48,7 @@ Game Master 6 probes your GPU's dedicated VRAM on first launch and applies a saf
 
 ## Quick Start (Release ZIP)
 
-1. Download **`GameMaster6-v1.3-Release.zip`** from **Releases** and extract it to a clean folder (e.g., `C:\Tools\GameMaster6\`).
+1. Download **`GameMaster6-v1.4-Release.zip`** from **Releases** and extract it to a clean folder (e.g., `C:\Tools\GameMaster6\`).
 2. Run **`GameMaster6.exe`** — it auto-detects your VRAM tier (`6 GB` / `8 GB` / `12 GB` / `16 GB+`).
 3. On **PLAY**, click **BROWSE GAME FOLDER...** to select your title directory and executable.
 4. Open **RUNNERS**:

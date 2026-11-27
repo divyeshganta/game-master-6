@@ -324,7 +324,7 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
     };
 
     let header = format!(
-        "=== Game Master 6 v1.3 session ({})\n\
+        "=== Game Master 6 v1.4 session ({})\n\
          exe              : {}\n\
          game_dir         : {}\n\
          runner           : {}\n\
@@ -586,7 +586,7 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
     };
 
     let header = format!(
-        "=== Game Master 6 v1.3 shader preparation ({})\n\
+        "=== Game Master 6 v1.4 shader preparation ({})\n\
          runner   : {}\n\
          cmd      : {}\n\
          shaders  : {}\n\

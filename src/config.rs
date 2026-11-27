@@ -53,7 +53,7 @@ pub struct Settings {
     pub indirect_window: bool,
     pub texture_no_wait: bool,
     pub merge_passes: bool,
-    // v1.2 Apex FPS & Standard KBM suite
+    // v1.4 Apex FPS & Open-World KBM suite
     pub display_1080p: bool,
     pub wide_refresh: bool,
     pub wide_merge: bool,
@@ -63,14 +63,14 @@ pub struct Settings {
     pub ambient_fill: bool,
     pub hoist_clamps: bool,
     pub fast_cores: bool,
-    // v1.2 studio launcher & runner options
+    // v1.4 studio launcher & runner options
     pub thin_lists: bool,                // VICTORY_THIN=1 (opt-in parallel list translation)
     pub display_mode: String,            // "auto", "1920x1080", "2560x1440", "3840x2160"
     pub borderless: bool,                // Borderless fullscreen vs windowed
     pub queue2_landing_mb: String,       // "48", "96", "128" -> VICTORY_QUEUE2_LANDING_MB
     pub ambient_shade: String,           // VICTORY_AMBIENT_SHADE
     pub last_prepared_runner_sig: String,// "size:mtime" of runner that last prepared cache
-    // v1.2 hardware-adaptive & verified Baseline residency/pipeline settings
+    // v1.4 hardware-adaptive & verified BASELINE residency/pipeline settings
     pub active_preset: String,           // "low", "balanced", "high", "custom"
     pub card_buffers_mb: String,         // "", "256", "512", "1024", "2048", "4096" -> VICTORY_CARD_BUFFERS_MB
     pub texture_room_percent: String,    // "88".."97" -> VICTORY_TEXTURE_ROOM_PERCENT
@@ -89,9 +89,9 @@ pub struct Settings {
     pub no_wait_resident: bool,          // VICTORY_WAIT_RESIDENT=0 (skip map/residency stalls)
     pub ambient_val: String,             // "off", "0.6", "0.8" -> VICTORY_AMBIENT
     pub ambient_air: String,             // "0", "1.0", "1.2", "1.5" -> VICTORY_AMBIENT_AIR
-    // v1.2 universal HUD density & keymap standard
+    // v1.4 universal HUD density & keymap standard
     pub hud_mode: u8,                    // 0=Compact, 1=Standard+FrametimeGraph, 2=Minimal
-    pub keymap_preset: String,           // "pc-std", "fps", "left-handed", "pad-only"
+    pub keymap_preset: String,           // "open-world", "fps", "left-handed", "pad-only"
     pub ab_experiment: String,           // "off", "async-submit", "thin", "wide-refresh", "upload-ahead" -> VICTORY_AB
     pub runner_env_overrides: Vec<(String, String)>, // per-runner KEY=VAL;... overrides keyed by runner_slug
     pub win_x: i32,
@@ -100,6 +100,9 @@ pub struct Settings {
     pub win_h: i32,
     pub pinned_baseline_runner: String,
     pub pinned_baseline_locked: bool,
+    pub dlss_mode: String,               // "off", "performance", "balanced", "quality"
+    pub framegen_x: u32,                 // 0=off, 2..=6
+    pub frame_interval_us: String,       // e.g. "50000" (20 fps base -> 60 fps FG)
 }
 
 impl Default for Settings {
@@ -128,7 +131,7 @@ impl Default for Settings {
             isolated_cache: false,
             offline_mode: false,
             theme: "vice".into(),
-            // v1.2: Hardware-adaptive BALANCED baseline defaults (12 GB sweet spot)
+            // v1.4: Hardware-adaptive BALANCED baseline defaults (12 GB sweet spot)
             card_buffers_min_mb: "4".into(),
             card_rehash_runs: true,
             join_copies: true,
@@ -188,7 +191,7 @@ impl Default for Settings {
             ambient_val: "0.3".into(),
             ambient_air: "1.2".into(),
             hud_mode: 1,
-            keymap_preset: "pc-std".into(),
+            keymap_preset: "open-world".into(),
             ab_experiment: "off".into(),
             runner_env_overrides: Vec::new(),
             win_x: -1,
@@ -197,6 +200,9 @@ impl Default for Settings {
             win_h: 820,
             pinned_baseline_runner: String::new(),
             pinned_baseline_locked: false,
+            dlss_mode: "quality".into(),
+            framegen_x: 3,
+            frame_interval_us: String::new(),
         }
     }
 }
@@ -342,6 +348,9 @@ impl Settings {
                     "win_h" => s.win_h = v.trim().parse().unwrap_or(820).clamp(680, 2160),
                     "pinned_baseline_runner" => s.pinned_baseline_runner = v.trim().to_string(),
                     "pinned_baseline_locked" => s.pinned_baseline_locked = parse_bool(v),
+                    "dlss_mode" => if !v.trim().is_empty() { s.dlss_mode = v.trim().to_ascii_lowercase(); },
+                    "framegen_x" => s.framegen_x = v.trim().parse::<u32>().unwrap_or(0).clamp(0, 6),
+                    "frame_interval_us" => s.frame_interval_us = v.trim().to_string(),
                     other => {
                         if let Some(id) = other.strip_prefix("runner_env.") {
                             let id_clean = id.trim().to_ascii_lowercase();
@@ -366,7 +375,7 @@ impl Settings {
 
     pub fn save(&self) -> Result<(), String> {
         let mut text = format!(
-            "# Game Master 6 v1.2 settings\n\
+            "# Game Master 6 v1.4 settings\n\
              exe={}\n\
              game_dir={}\n\
              runner={}\n\
@@ -454,7 +463,10 @@ impl Settings {
              win_w={}\n\
              win_h={}\n\
              pinned_baseline_runner={}\n\
-             pinned_baseline_locked={}\n",
+             pinned_baseline_locked={}\n\
+             dlss_mode={}\n\
+             framegen_x={}\n\
+             frame_interval_us={}\n",
             self.exe.trim(),
             self.game_dir.trim(),
             self.runner.trim(),
@@ -543,6 +555,9 @@ impl Settings {
             self.win_h,
             self.pinned_baseline_runner.trim(),
             bstr(self.pinned_baseline_locked),
+            self.dlss_mode.trim(),
+            self.framegen_x,
+            self.frame_interval_us.trim(),
         );
         for (id, val) in &self.runner_env_overrides {
             if !id.trim().is_empty() && !val.trim().is_empty() {
@@ -595,6 +610,49 @@ impl Settings {
             "2560x1440" => "2560 × 1440",
             "3840x2160" => "3840 × 2160",
             _ => "1920 × 1080",
+        }
+    }
+
+    pub fn dlss_mode_label(&self) -> &'static str {
+        match self.dlss_mode.trim().to_ascii_lowercase().as_str() {
+            "off" => "DLSS: OFF",
+            "performance" => "DLSS: PERF",
+            "balanced" => "DLSS: BAL",
+            "dlaa" => "DLSS: DLAA",
+            _ => "DLSS: QUAL",
+        }
+    }
+
+    pub fn framegen_label(&self) -> String {
+        if self.framegen_x == 0 || self.dlss_mode.trim().eq_ignore_ascii_case("off") {
+            "FG: OFF".into()
+        } else {
+            format!("FG: {}X", self.framegen_x)
+        }
+    }
+
+    pub fn cycle_dlss_mode(&mut self) {
+        self.dlss_mode = match self.dlss_mode.trim().to_ascii_lowercase().as_str() {
+            "off" => "performance",
+            "performance" => "balanced",
+            "balanced" => "quality",
+            _ => "off",
+        }
+        .into();
+        if self.dlss_mode == "off" {
+            self.framegen_x = 0;
+        }
+    }
+
+    pub fn cycle_framegen_x(&mut self, max_x: u32) {
+        let cap = max_x.clamp(2, 6);
+        self.framegen_x = match self.framegen_x {
+            0 => 2,
+            x if x < cap => x + 1,
+            _ => 0,
+        };
+        if self.framegen_x > 0 && self.dlss_mode.trim().eq_ignore_ascii_case("off") {
+            self.dlss_mode = "quality".into();
         }
     }
 

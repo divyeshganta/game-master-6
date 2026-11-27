@@ -735,6 +735,141 @@ pub fn parse_victory_settings(path: &Path) -> Vec<(String, String)> {
     out
 }
 
+/// Reads `victory-settings.txt` beside `runner_path` and syncs Play UI fields
+/// (`console_model`, `display_mode`, `dlss_mode`, `framegen_x`, `texture_room_percent`,
+/// `bvh_builder`, `log_level`, `frame_interval_us`) so the UI always reflects what will launch.
+pub fn sync_from_victory_settings(s: &mut Settings, runner_path: &Path) -> bool {
+    let Some(parent) = runner_path.parent() else {
+        return false;
+    };
+    let vs_path = parent.join("victory-settings.txt");
+    if !vs_path.is_file() {
+        return false;
+    }
+    let pairs = parse_victory_settings(&vs_path);
+    if pairs.is_empty() {
+        return false;
+    }
+    let get = |k: &str| pairs.iter().rev().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
+
+    if let Some(c) = get("VICTORY_MENU_CONSOLE") {
+        if c.eq_ignore_ascii_case("series-s") || c.eq_ignore_ascii_case("series-x") {
+            s.console_model = c.to_ascii_lowercase();
+        }
+    }
+    if let Some(out) = get("VICTORY_OUTPUT") {
+        if !out.trim().is_empty() {
+            s.display_mode = out.trim().to_string();
+            s.display_1080p = s.display_mode == "1920x1080";
+        }
+    } else if let Some(n1440) = get("VICTORY_NATIVE_1440P") {
+        if n1440 == "1" {
+            s.display_mode = "2560x1440".into();
+            s.display_1080p = false;
+        }
+    }
+    if let Some(dlss_on) = get("VICTORY_DLSS") {
+        if dlss_on == "0" {
+            s.dlss_mode = "off".into();
+        } else if let Some(m) = get("VICTORY_DLSS_MODE").or_else(|| get("VICTORY_MENU_DLSS")) {
+            let ml = m.trim().to_ascii_lowercase();
+            if matches!(ml.as_str(), "off" | "performance" | "balanced" | "quality" | "dlaa") {
+                s.dlss_mode = ml;
+            }
+        }
+    } else if let Some(m) = get("VICTORY_MENU_DLSS") {
+        let ml = m.trim().to_ascii_lowercase();
+        if matches!(ml.as_str(), "off" | "performance" | "balanced" | "quality" | "dlaa") {
+            s.dlss_mode = ml;
+        }
+    }
+    if let Some(fg_on) = get("VICTORY_FRAMEGEN") {
+        if fg_on == "0" {
+            s.framegen_x = 0;
+        } else if let Some(fx) = get("VICTORY_FRAMEGEN_X").or_else(|| get("VICTORY_MENU_FRAMEGEN")) {
+            s.framegen_x = fx.trim().parse::<u32>().unwrap_or(0).clamp(0, 6);
+        }
+    } else if let Some(fx) = get("VICTORY_MENU_FRAMEGEN") {
+        s.framegen_x = fx.trim().parse::<u32>().unwrap_or(0).clamp(0, 6);
+    }
+    if let Some(tr) = get("VICTORY_TEXTURE_ROOM_PERCENT") {
+        if !tr.trim().is_empty() {
+            s.texture_room_percent = tr.trim().to_string();
+        }
+    }
+    if let Some(rt) = get("VICTORY_BVH_BUILDER") {
+        s.bvh_builder = rt.trim() == "1";
+    }
+    if let Some(lg) = get("VICTORY_LOG") {
+        if !lg.trim().is_empty() {
+            s.log_level = lg.trim().to_ascii_lowercase();
+        }
+    }
+    if let Some(fi) = get("VICTORY_FRAME_INTERVAL_US") {
+        s.frame_interval_us = fi.trim().to_string();
+    }
+    true
+}
+
+/// Writes Play UI settings into `victory-settings.txt` beside `runner_path`,
+/// preserving all unrelated keys already present in the file.
+pub fn sync_to_victory_settings(s: &Settings, runner_path: &Path) -> Result<(), String> {
+    let Some(parent) = runner_path.parent() else {
+        return Err("Invalid runner path".into());
+    };
+    if !has_dlss_dlls_beside(runner_path) && !parent.join("victory-settings.txt").is_file() {
+        return Ok(());
+    }
+    let vs_path = parent.join("victory-settings.txt");
+    let mut pairs = parse_victory_settings(&vs_path);
+    let mut set_kv = |k: &str, v: String| {
+        if let Some(entry) = pairs.iter_mut().find(|(ek, _)| ek == k) {
+            entry.1 = v;
+        } else {
+            pairs.push((k.to_string(), v));
+        }
+    };
+
+    let dlss_m = s.dlss_mode.trim().to_ascii_lowercase();
+    let dlss_active = !dlss_m.is_empty() && dlss_m != "off";
+    let fg_x = if dlss_active { s.framegen_x.clamp(0, 6) } else { 0 };
+
+    set_kv("VICTORY_MENU_CONSOLE", s.console_model.clone());
+    set_kv("VICTORY_MENU_RES", if s.display_mode == "1280x720" { "720".into() } else if s.display_mode == "1920x1080" { "1080".into() } else { "1440".into() });
+    set_kv("VICTORY_NATIVE_1440P", if s.display_mode == "2560x1440" { "1" } else { "0" }.into());
+    if matches!(s.display_mode.as_str(), "1280x720" | "1664x936" | "1920x1080" | "2560x1440" | "3840x2160") {
+        set_kv("VICTORY_OUTPUT", s.display_mode.clone());
+    }
+    set_kv("VICTORY_DLSS", if dlss_active { "1" } else { "0" }.into());
+    set_kv("VICTORY_DLSS_MODE", if dlss_active { dlss_m.clone() } else { "off".into() });
+    set_kv("VICTORY_MENU_DLSS", if dlss_active { dlss_m } else { "off".into() });
+    set_kv("VICTORY_FRAMEGEN", if fg_x > 0 { "1" } else { "0" }.into());
+    set_kv("VICTORY_FRAMEGEN_X", fg_x.to_string());
+    set_kv("VICTORY_MENU_FRAMEGEN", fg_x.to_string());
+    if !s.texture_room_percent.trim().is_empty() {
+        set_kv("VICTORY_TEXTURE_ROOM_PERCENT", s.texture_room_percent.trim().to_string());
+    }
+    set_kv("VICTORY_BVH_BUILDER", if s.bvh_builder { "1" } else { "0" }.into());
+    set_kv("VICTORY_LOG", s.effective_victory_log().to_string());
+    if !s.frame_interval_us.trim().is_empty() {
+        set_kv("VICTORY_FRAME_INTERVAL_US", s.frame_interval_us.trim().to_string());
+        if let Ok(us) = s.frame_interval_us.trim().parse::<u32>() {
+            if us > 0 {
+                set_kv("VICTORY_MENU_FPS", (1_000_000 / us).max(1).to_string());
+            }
+        }
+    }
+
+    let mut out = String::new();
+    for (k, v) in pairs {
+        out.push_str(&format!("{k}={v}\n"));
+    }
+    let tmp = parent.join("victory-settings.txt.tmp");
+    fs::write(&tmp, &out).map_err(|e| format!("Cannot write victory-settings.txt: {e}"))?;
+    fs::rename(&tmp, &vs_path).map_err(|e| format!("Cannot replace victory-settings.txt: {e}"))?;
+    Ok(())
+}
+
 pub fn probe_runner_capabilities(exe_path: &Path) -> RunnerCapabilities {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
