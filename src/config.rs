@@ -156,8 +156,8 @@ impl Default for Settings {
             ambient_fill: true,
             hoist_clamps: true,
             fast_cores: true,
-            thin_lists: true,
-            display_mode: "1600x900".into(),
+            thin_lists: false,
+            display_mode: "1920x1080".into(),
             borderless: true,
             queue2_landing_mb: "96".into(),
             ambient_shade: "1.0,0.6,0.1,0.45".into(),
@@ -178,8 +178,8 @@ impl Default for Settings {
             upload_ahead: true,
             levels_on_demand: true,
             no_wait_resident: true,
-            ambient_val: "0.8".into(),
-            ambient_air: "1.5".into(),
+            ambient_val: "0.3".into(),
+            ambient_air: "1.2".into(),
             hud_mode: 1,
             keymap_preset: "std-pc".into(),
             ab_experiment: "off".into(),
@@ -1039,7 +1039,7 @@ mod tests {
         s.runner = String::new();
         s.upscaler_dir = String::new();
         assert!(!s.resolved_runner().as_os_str().is_empty());
-        assert_eq!(s.display_mode_label(), "1600 × 900");
+        assert_eq!(s.display_mode_label(), "1920 × 1080");
 
         let long_seg = "a".repeat(260);
         s.exe = format!(r"C:\Titles\日本語\テスト\{long_seg}\title.exe");

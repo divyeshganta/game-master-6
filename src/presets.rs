@@ -166,37 +166,26 @@ pub fn apply_adaptive_preset(s: &mut Settings, preset: PresetKind, sys: &SystemI
             s.log_level = "warn".into();
         }
 
-        // ── Tier 2: 10–12 GB VRAM (e.g. RTX 5070 Ti 12 GB) ─────────────────
+        // ── Tier 2: 10–12 GB VRAM ──────────────────────────────────────────
         (HardwareTier::Mid12, PresetKind::Low) => {
-            s.console_model = "series-s".into();
+            // Scaled 720p max-FPS: Series X + 1280x720 output + 90% tex room
+            s.console_model = "series-x".into();
             s.display_mode = "1280x720".into();
             s.card_buffers_min_mb = "4".into();
-            s.card_buffers_mb = "768".into();
+            s.card_buffers_mb = "1024".into();
             s.texture_room_percent = "90".into();
             s.card_room_for_targets_mb = "2048".into();
             s.no_wait_resident = true;
             s.relay_mode = 2;
             s.card_steps = 2;
-            s.thin_lists = true;
+            s.thin_lists = false;
             s.upload_ahead = true;
+            s.ambient_val = "0.3".into();
+            s.ambient_air = "1.2".into();
             s.log_level = "warn".into();
         }
         (HardwareTier::Mid12, PresetKind::Balanced) => {
-            // Verified 12 GB 180213.log baseline: Series S + 900p + 4 MB min buf + 2560 MB targets + 94% tex room
-            s.console_model = "series-s".into();
-            s.display_mode = "1600x900".into();
-            s.card_buffers_min_mb = "4".into();
-            s.card_buffers_mb = "1024".into();
-            s.texture_room_percent = "94".into();
-            s.card_room_for_targets_mb = "2560".into();
-            s.no_wait_resident = true;
-            s.relay_mode = 2;
-            s.card_steps = 2;
-            s.thin_lists = true;
-            s.upload_ahead = true;
-            s.log_level = "warn".into();
-        }
-        (HardwareTier::Mid12, PresetKind::High) => {
+            // Default 12 GB preset: Series S + native 1080p for crisp subtitles/UI + Blackwell defaults
             s.console_model = "series-s".into();
             s.display_mode = "1920x1080".into();
             s.card_buffers_min_mb = "4".into();
@@ -206,8 +195,27 @@ pub fn apply_adaptive_preset(s: &mut Settings, preset: PresetKind, sys: &SystemI
             s.no_wait_resident = true;
             s.relay_mode = 2;
             s.card_steps = 2;
-            s.thin_lists = true;
+            s.thin_lists = false;
             s.upload_ahead = true;
+            s.ambient_val = "0.3".into();
+            s.ambient_air = "1.2".into();
+            s.log_level = "warn".into();
+        }
+        (HardwareTier::Mid12, PresetKind::High) => {
+            // Sharp 936p: Series X + 1664x936 output
+            s.console_model = "series-x".into();
+            s.display_mode = "1664x936".into();
+            s.card_buffers_min_mb = "4".into();
+            s.card_buffers_mb = "1024".into();
+            s.texture_room_percent = "94".into();
+            s.card_room_for_targets_mb = "2560".into();
+            s.no_wait_resident = true;
+            s.relay_mode = 2;
+            s.card_steps = 2;
+            s.thin_lists = false;
+            s.upload_ahead = true;
+            s.ambient_val = "0.3".into();
+            s.ambient_air = "1.2".into();
             s.log_level = "warn".into();
         }
 
@@ -355,11 +363,16 @@ mod tests {
         let env = build_runner_env(&s);
         let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
 
-        assert_eq!(get("VICTORY_DISPLAY_MODE"), Some("1600x900"));
+        assert_eq!(get("VICTORY_DISPLAY_MODE"), Some("1920x1080"));
+        assert_eq!(get("VICTORY_OUTPUT"), Some("1920x1080"));
         assert_eq!(get("VICTORY_CARD_BUFFERS_MIN_MB"), Some("4"));
         assert_eq!(get("VICTORY_CARD_ROOM_FOR_TARGETS_MB"), Some("2560"));
         assert_eq!(get("VICTORY_TEXTURE_ROOM_PERCENT"), Some("94"));
         assert_eq!(get("VICTORY_WAIT_RESIDENT"), Some("0"));
+        assert_eq!(get("VICTORY_THIN"), Some("0"));
+        assert_eq!(get("VICTORY_AMBIENT"), Some("0.3"));
+        assert_eq!(get("VICTORY_PORT_GUARD"), Some("1"));
+        assert_eq!(get("VICTORY_PORT_JOURNAL"), Some("1"));
     }
 
     #[test]

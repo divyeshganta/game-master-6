@@ -33,7 +33,19 @@ pub fn build_runner_env(s: &Settings) -> Vec<(String, String)> {
     set("VICTORY_BORDERLESS", if s.borderless { "1" } else { "0" }.into());
     match s.display_mode.trim() {
         "auto" | "" => {}
-        dm => set("VICTORY_DISPLAY_MODE", dm.to_string()),
+        dm => {
+            set("VICTORY_DISPLAY_MODE", dm.to_string());
+            let mapped = if dm.eq_ignore_ascii_case("1600x900") { "1664x936" } else { dm };
+            let valid_mode = matches!(
+                mapped,
+                "1280x720" | "1664x936" | "1920x1080" | "2560x1440" | "3840x2160"
+            );
+            let safe_for_console = !s.console_model.eq_ignore_ascii_case("series-s")
+                || matches!(mapped, "1920x1080" | "2560x1440" | "3840x2160");
+            if valid_mode && safe_for_console {
+                set("VICTORY_OUTPUT", mapped.to_string());
+            }
+        }
     }
 
     // VRAM, card buffers & texture residency (verified against shadow.rs & resource.rs)
@@ -143,6 +155,16 @@ pub fn build_runner_env(s: &Settings) -> Vec<(String, String)> {
     if let Some(ab_val) = crate::ab_bench::AbExperiment::from_id(&s.ab_experiment).env_value() {
         set("VICTORY_AB", ab_val.to_string());
     }
+
+    // Verified Port 6/7 + idle memory-trimming flags (VICTORY_PORT_CONSTANTS / VICTORY_PORT_CBV stay OFF by default)
+    set("VICTORY_PORT_GUARD", "1".into());
+    set("VICTORY_PORT_JOURNAL", "1".into());
+    set("VICTORY_LIST_IDLE_TRIM_S", "5".into());
+    set("VICTORY_SCRATCH_SPARE_MB", "128".into());
+    set("VICTORY_SEND_SPARE_MB", "128".into());
+    set("VICTORY_STAGING_IDLE_MS", "2000".into());
+    set("VICTORY_WINDOW_IDLE_MS", "2000".into());
+    set("VICTORY_READ_KEEP_MB", "64".into());
 
     // Custom user env overrides always win last (KEY=VAL;KEY2=VAL2)
     for pair in s.custom_env.split(';') {

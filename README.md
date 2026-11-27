@@ -73,7 +73,7 @@ Game Master 6 probes your GPU's dedicated VRAM on first launch and applies a saf
 
 ### Build & Test
 ```powershell
-git clone https://github.com/divyeshganta/game-master-6.git
+git clone https://github.com/game-master-6/game-master-6.git
 cd game-master-6
 cargo test
 cargo build --release

@@ -1831,8 +1831,15 @@ unsafe fn on_timer(hwnd: HWND) {
                 if brand_runner_window(sess.child.id(), "Game Master 6 - Title", &ico, true) {
                     sess.window_branded = true;
                 }
-                if !st.settings.borderless && !sess.window_maximized && maximize_runner_window(sess.child.id()) {
-                    sess.window_maximized = true;
+                if !sess.window_maximized {
+                    let ok = if st.settings.borderless {
+                        make_runner_window_borderless_fullscreen(sess.child.id())
+                    } else {
+                        maximize_runner_window(sess.child.id())
+                    };
+                    if ok {
+                        sess.window_maximized = true;
+                    }
                 }
             }
             if st.anim_tick % 6 == 0 {

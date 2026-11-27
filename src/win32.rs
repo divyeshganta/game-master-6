@@ -1489,6 +1489,60 @@ pub unsafe fn maximize_runner_window(pid: u32) -> bool {
     true
 }
 
+/// Converts the active runner's top-level window (by PID) into true borderless fullscreen
+/// covering the primary monitor, stripping titlebar/borders (`WS_CAPTION | WS_THICKFRAME | ...`).
+pub unsafe fn make_runner_window_borderless_fullscreen(pid: u32) -> bool {
+    struct Ctx {
+        pid: u32,
+        found: HWND,
+    }
+    unsafe extern "system" fn enum_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let ctx = &mut *(lparam as *mut Ctx);
+        let mut wpid: DWORD = 0;
+        GetWindowThreadProcessId(hwnd, &mut wpid);
+        if wpid == ctx.pid && IsWindowVisible(hwnd) != 0 {
+            ctx.found = hwnd;
+            return 0;
+        }
+        1
+    }
+    let mut ctx = Ctx {
+        pid,
+        found: std::ptr::null_mut(),
+    };
+    EnumWindows(Some(enum_cb), &mut ctx as *mut Ctx as LPARAM);
+    if ctx.found.is_null() {
+        return false;
+    }
+    const GWL_STYLE: c_int = -16;
+    const GWL_EXSTYLE: c_int = -20;
+    const SWP_FRAMECHANGED: UINT = 0x0020;
+    const SWP_NOOWNERZORDER: UINT = 0x0200;
+    const SWP_SHOWWINDOW: UINT = 0x0040;
+
+    let style = GetWindowLongPtrW(ctx.found, GWL_STYLE);
+    let new_style = (style & !(0x00CF_0000_isize)) | (WS_POPUP as isize) | (WS_VISIBLE as isize);
+    let _ = SetWindowLongPtrW(ctx.found, GWL_STYLE, new_style);
+
+    let ex_style = GetWindowLongPtrW(ctx.found, GWL_EXSTYLE);
+    let new_ex_style = ex_style & !(0x0002_0301_isize);
+    let _ = SetWindowLongPtrW(ctx.found, GWL_EXSTYLE, new_ex_style);
+
+    let w = GetSystemMetrics(SM_CXSCREEN).max(1);
+    let h = GetSystemMetrics(SM_CYSCREEN).max(1);
+    let _ = SetWindowPos(
+        ctx.found,
+        std::ptr::null_mut(),
+        0,
+        0,
+        w,
+        h,
+        SWP_FRAMECHANGED | SWP_NOOWNERZORDER | SWP_SHOWWINDOW,
+    );
+    let _ = SetForegroundWindow(ctx.found);
+    true
+}
+
 /// Automatically finds the active runner's top-level window (by PID) and brands it with
 /// "Game Master 6 - Title" and Game Master 6's `logo.ico` icon.
 pub unsafe fn brand_runner_window(pid: u32, title_text: &str, icon_path: &Path, clean_caption: bool) -> bool {
