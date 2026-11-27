@@ -49,14 +49,14 @@ Game Master 6 probes your GPU's dedicated VRAM on first launch and applies a saf
 | VRAM Tier | Console Default | `BALANCED` Resolution | `TEXTURE_ROOM_PERCENT` | `CARD_ROOM_FOR_TARGETS_MB` | `CARD_BUFFERS_MB` / `MIN_MB` |
 |---|---|---|---|---|---|
 | **8 GB** | `series-s` | `1280x720` | `85%` | `1536` | `512` / `4` |
-| **12 GB** | `series-s` (toggleable) | `1600x900` (`LOW`: `1280x720` @ `90%`) | `94%` | `2560` | `1024` / `4` |
+| **12 GB** | `series-s` (toggleable) | `1920x1080` (`LOW`: scaled `1280x720` @ `90%`, `HIGH`: `1664x936`) | `94%` | `2560` | `1024` / `4` |
 | **16 GB+** | `series-x` | `1920x1080` | `94%` | `2560` | `1024` / `4` |
 
 ---
 
 ## Quick Start (Release ZIP)
 
-1. Download **`GameMaster6-v1.0-Release.zip`** from the GitHub **Releases** tab and extract it to a clean folder (e.g., `C:\Tools\GameMaster6\`).
+1. Download **`GameMaster6-v1.2-Release.zip`** from the GitHub **Releases** tab and extract it to a clean folder (e.g., `C:\Tools\GameMaster6\`).
 2. Run **`GameMaster6.exe`**.
 3. On the **PLAY** tab, click **BROWSE GAME FOLDER...** to select your title directory and executable.
 4. Open **RUNNERS** to select or import your `victory.exe` runner.

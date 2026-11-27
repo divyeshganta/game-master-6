@@ -1128,7 +1128,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         .session
         .as_ref()
         .filter(|s| s.kind == crate::launcher::ProcessKind::Prepare)
-        .map(|s| s.parsed_progress.unwrap_or(15));
+        .map(|s| s.parsed_progress.unwrap_or(2));
     let preparing = prep_prog.is_some();
     let cache_ready = ctx.audit.shader_cache_ready && !needs_refresh;
     let prep_bg = if cache_ready && !preparing {

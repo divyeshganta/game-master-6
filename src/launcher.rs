@@ -214,6 +214,8 @@ pub struct ActiveSession {
     pub live_telemetry: Option<LiveFrameTelemetry>,
     pub window_branded: bool,
     pub window_maximized: bool,
+    pub cache_dir: PathBuf,
+    pub initial_cache_files: usize,
 }
 
 pub struct PollUpdate {
@@ -456,7 +458,41 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
         live_telemetry: None,
         window_branded: false,
         window_maximized: false,
+        cache_dir: cache_dir_for(&runner_path, kind, s.isolated_cache),
+        initial_cache_files: 0,
     })
+}
+
+/// Checks `<runner> --help` text for the `shaders` subcommand (used by `cool_fox` / newer VIctory builds).
+pub fn help_supports_shaders(help_text: &str) -> bool {
+    help_text.lines().any(|line| {
+        let t = line.trim_start();
+        t == "shaders" || t.starts_with("shaders ") || t.starts_with("shaders\t")
+    })
+}
+
+/// Probes `<runner> --help` (hidden console) to detect whether the `shaders` subcommand is supported.
+pub fn supports_shaders_subcommand(runner_path: &Path) -> bool {
+    let mut cmd = Command::new(runner_path);
+    cmd.arg("--help");
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    let Ok(out) = cmd.output() else {
+        return false;
+    };
+    let text = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    help_supports_shaders(&text)
+}
+
+fn count_dir_files(dir: &Path) -> usize {
+    std::fs::read_dir(dir).map(|rd| rd.count()).unwrap_or(0)
 }
 
 pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
@@ -493,11 +529,14 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
         .map_err(|e| format!("Cannot create prepare log: {e}"))?;
 
     let runner_path = s.resolved_runner();
+    let use_shaders_cmd = supports_shaders_subcommand(&runner_path);
     let ztrx = is_ztrx_runner(&runner_path);
     let lower_runner = runner_path.to_string_lossy().to_ascii_lowercase();
     let baseline = lower_runner.contains("baseline") || lower_runner.contains("overnight-tuned");
     let use_cache_flag = !ztrx && !baseline;
-    let flags_desc = if !use_cache_flag {
+    let flags_desc = if use_shaders_cmd {
+        format!("shaders --jobs {jobs}")
+    } else if !use_cache_flag {
         format!("translate --pipelines --jobs {jobs}")
     } else {
         format!("translate --cache --pipelines --jobs {jobs}")
@@ -525,19 +564,30 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
     let err = file.try_clone().map_err(|e| e.to_string())?;
 
     let cache_dir = cache_dir_for(&runner_path, kind, s.isolated_cache);
+    let initial_cache_files = count_dir_files(&cache_dir.join("shaders"));
     let mut pcmd = Command::new(&runner_path);
-    pcmd.arg("translate");
-    if use_cache_flag {
-        pcmd.arg("--cache");
+    if use_shaders_cmd {
+        pcmd.arg("shaders")
+            .arg("--jobs")
+            .arg(jobs.to_string())
+            .arg(&shaders)
+            .arg(exe)
+            .arg(&bvh)
+            .arg(&upscaler);
+    } else {
+        pcmd.arg("translate");
+        if use_cache_flag {
+            pcmd.arg("--cache");
+        }
+        pcmd.arg("--pipelines")
+            .arg("--jobs")
+            .arg(jobs.to_string())
+            .arg(&shaders)
+            .arg(exe)
+            .arg(&bvh)
+            .arg(&upscaler);
     }
-    pcmd.arg("--pipelines")
-        .arg("--jobs")
-        .arg(jobs.to_string())
-        .arg(&shaders)
-        .arg(exe)
-        .arg(&bvh)
-        .arg(&upscaler)
-        .env("VICTORY_LOG", s.effective_victory_log())
+    pcmd.env("VICTORY_LOG", s.effective_victory_log())
         .stdout(Stdio::from(out))
         .stderr(Stdio::from(err));
     if s.isolated_cache {
@@ -559,12 +609,18 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
         log_path,
         started_at: Instant::now(),
         log_offset: initial_offset,
-        parsed_progress: None,
-        phase: "Translating shaders & building pipeline cache...".into(),
+        parsed_progress: Some(2),
+        phase: if use_shaders_cmd {
+            "Precompiling shaders into cache (shaders --jobs)...".into()
+        } else {
+            "Translating shaders & building pipeline cache...".into()
+        },
         timer_active: false,
         live_telemetry: None,
         window_branded: false,
         window_maximized: false,
+        cache_dir,
+        initial_cache_files,
     })
 }
 
@@ -597,6 +653,19 @@ pub fn poll(session: &mut ActiveSession) -> PollUpdate {
                 }
             }
         }
+    }
+
+    if session.kind == ProcessKind::Prepare {
+        let cur_files = count_dir_files(&session.cache_dir.join("shaders"));
+        let added = cur_files.saturating_sub(session.initial_cache_files) as u64;
+        let cache_pct = if added > 0 {
+            ((added * 100) / 26_000).clamp(2, 99) as u32
+        } else {
+            0
+        };
+        let time_pct = ((session.started_at.elapsed().as_secs() * 100) / 210).clamp(2, 95) as u32;
+        let best = session.parsed_progress.unwrap_or(2).max(cache_pct).max(time_pct);
+        session.parsed_progress = Some(best.min(99));
     }
 
     let mut finished = None;
@@ -693,6 +762,20 @@ fn extract_progress(line: &str) -> Option<u32> {
                     }
                 }
             }
+        }
+    }
+    let lower = line.to_ascii_lowercase();
+    if let Some(idx) = lower.find("shaders in the cache") {
+        if let Some(n) = lower[..idx].split_whitespace().last().and_then(|s| s.parse::<u64>().ok()) {
+            if lower.contains("do not translate") {
+                return Some(100);
+            }
+            return Some(((n * 100) / 26_200).clamp(1, 99) as u32);
+        }
+    }
+    if let Some(idx) = lower.find("shaders so far") {
+        if let Some(n) = lower[..idx].split_whitespace().last().and_then(|s| s.parse::<u64>().ok()) {
+            return Some(((n * 100) / 26_200).clamp(1, 99) as u32);
         }
     }
     for token in line.split_whitespace() {
@@ -828,4 +911,21 @@ pub fn run_shader_census(s: &Settings) -> Result<crate::diagnostics::ShaderCensu
     );
     let lines: Vec<String> = combined.lines().map(|l| strip_ansi(l)).collect();
     Ok(crate::diagnostics::parse_shader_census(&lines))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shaders_subcommand_detection_and_progress_parsing() {
+        let help = "Commands:\n  translate    Run every shader\n  shaders      Translate every shader found into the shader cache\n  run          Prepare, map and bind\n";
+        assert!(help_supports_shaders(help));
+        assert!(!help_supports_shaders("Commands:\n  translate    Run every shader\n  run          Run title\n"));
+
+        assert_eq!(extract_progress("1000 shaders in the cache, 12 s"), Some(3));
+        assert_eq!(extract_progress("13100 shaders in the cache, 105 s"), Some(50));
+        assert_eq!(extract_progress("26177 shaders in the cache, 5 do not translate, 210 s"), Some(100));
+        assert_eq!(extract_progress("warm-up 5240 shaders so far, 40 s"), Some(20));
+    }
 }
