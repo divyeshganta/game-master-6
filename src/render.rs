@@ -95,6 +95,8 @@ pub enum Target {
     ClearUpscalerDir,
     SelectLog(usize),
     RollbackRunner(usize),
+    UpdateRunner(usize),
+    FetchNvidiaSdks(usize),
     DeleteRunner(usize),
     ToggleSkipShader(usize),
     ClearSkipShaders,
@@ -113,7 +115,7 @@ pub enum Target {
     AutoEnhance,
     RumblePad(u32),
     SetLogFilter(usize),
-    CopyLogSlice,
+    CopySessionTail,
     ToggleConsoleQuick,
     ToggleHudOverlay,
     CycleHudMode,
@@ -198,7 +200,7 @@ pub fn tuning_max_scroll(client_h: c_int) -> usize {
 pub fn runner_badge(settings: &Settings) -> &'static str {
     let r = settings.resolved_runner().to_string_lossy().to_ascii_lowercase();
     if r.contains("baseline") {
-        "Baseline"
+        "BASELINE"
     } else if r.contains("ztrx") {
         "ZTRX"
     } else if r.contains("diag") {
@@ -673,7 +675,7 @@ struct ThemePalette {
 }
 
 fn theme_palette(name: &str) -> ThemePalette {
-    match name {
+    let base = match name {
         "sunset" => ThemePalette {
             bg_l: rgb(24, 10, 18),
             bg_r: rgb(38, 18, 12),
@@ -714,12 +716,51 @@ fn theme_palette(name: &str) -> ThemePalette {
             hero_l: COL_HERO_L,
             hero_r: COL_HERO_R,
         },
+    };
+    apply_theme_json_overlay(base)
+}
+
+fn parse_hex_color(s: &str) -> Option<DWORD> {
+    let h = s.trim().trim_start_matches('#');
+    if h.len() != 6 {
+        return None;
     }
+    let r = u8::from_str_radix(&h[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&h[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&h[4..6], 16).ok()?;
+    Some(rgb(r, g, b))
+}
+
+fn extract_theme_hex(json: &str, key: &str) -> Option<DWORD> {
+    let needle = format!("\"{key}\"");
+    let idx = json.find(&needle)?;
+    let rest = &json[idx + needle.len()..];
+    let colon = rest.find(':')?;
+    let after = rest[colon + 1..].trim_start();
+    let quote = after.strip_prefix('"')?;
+    let end = quote.find('"')?;
+    parse_hex_color(&quote[..end])
+}
+
+fn apply_theme_json_overlay(mut pal: ThemePalette) -> ThemePalette {
+    let path = Settings::app_dir().join("theme.json");
+    if let Ok(txt) = std::fs::read_to_string(path) {
+        if let Some(c) = extract_theme_hex(&txt, "accent") { pal.accent = c; }
+        if let Some(c) = extract_theme_hex(&txt, "bg_l") { pal.bg_l = c; }
+        if let Some(c) = extract_theme_hex(&txt, "bg_r") { pal.bg_r = c; }
+        if let Some(c) = extract_theme_hex(&txt, "sidebar") { pal.sidebar = c; }
+        if let Some(c) = extract_theme_hex(&txt, "panel") { pal.panel = c; }
+        if let Some(c) = extract_theme_hex(&txt, "border") { pal.border = c; }
+        if let Some(c) = extract_theme_hex(&txt, "hero_l") { pal.hero_l = c; }
+        if let Some(c) = extract_theme_hex(&txt, "hero_r") { pal.hero_r = c; }
+    }
+    pal
 }
 
 pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(RECT, Target)> {
     let mut hits = Vec::with_capacity(64);
-    let pal = theme_palette(&ctx.settings.theme);
+    let mut pal = theme_palette(&ctx.settings.theme);
+    let _ = &mut pal;
 
     // 1. Theme-aware Background gradient
     fill_gradient(hdc, RECT::new(0, 0, w, h), pal.bg_l, pal.bg_r, false);
@@ -782,7 +823,7 @@ pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(R
     );
     draw_text(
         hdc,
-        "v1.2",
+        "v1.3",
         RECT::new(20, h - 40, 104, h - 20),
         ctx.fonts.small_bold,
         COL_DIM,
@@ -814,7 +855,7 @@ pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(R
     } else {
         "CACHE NOT PREPARED".into()
     };
-    let header_sub = format!("v1.2 · {phase_txt}");
+    let header_sub = format!("v1.3 · {phase_txt}");
     draw_text(
         hdc,
         &header_sub,
@@ -938,7 +979,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     let tx = hero_r.left + 28;
     let tw = (hero_r.width() - 260).max(280);
     let gpu_eyebrow = if ctx.sys.gpu_name.is_empty() {
-        format!("DETECTING GPU  ·  {}  ·  v1.2", ctx.settings.active_runner_kind().badge())
+        format!("DETECTING GPU  ·  {}  ·  v1.3", ctx.settings.active_runner_kind().badge())
     } else if ctx.sys.vram_gb > 0.5 {
         format!(
             "{}  ·  {:.0} GB VRAM  ·  {}",
@@ -960,7 +1001,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     // Generous rects (70px) give Oswald's descenders room so neither line clips.
     draw_text(
         hdc,
-        "GAME MASTER",
+        "GAME MASTER 6",
         RECT::new(tx + 2, hero_r.top + 38, tx + tw + 4, hero_r.top + 108),
         ctx.fonts.hero,
         rgb(16, 6, 28),
@@ -968,7 +1009,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     );
     draw_text(
         hdc,
-        "GAME MASTER",
+        "GAME MASTER 6",
         RECT::new(tx - 1, hero_r.top + 36, tx + tw, hero_r.top + 106),
         ctx.fonts.hero,
         COL_WHITE,
@@ -976,7 +1017,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     );
     draw_text(
         hdc,
-        "6.0",
+        "AUTO VI",
         RECT::new(tx + 2, hero_r.top + 98, tx + tw + 4, hero_r.top + 168),
         ctx.fonts.hero,
         rgb(16, 6, 28),
@@ -984,7 +1025,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     );
     draw_text(
         hdc,
-        "6.0",
+        "AUTO VI",
         RECT::new(tx - 1, hero_r.top + 96, tx + tw, hero_r.top + 166),
         ctx.fonts.hero,
         COL_PINK,
@@ -1117,7 +1158,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     );
     draw_text(hdc, &preset_meta, RECT::new(preset_r.left + 16, preset_r.top + 96, preset_r.right - 16, preset_r.bottom - 10), ctx.fonts.small, COL_MUTED, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
 
-    // ── Primary actions: Prepare Cache (~35%) | Launch Title (~65%) ────────
+    // ── Primary actions: Prepare Cache (~35%) | Launch Game Master 6 (~65%) ────────
     let gap = 16;
     let actions_y = ctl_y + ctl_h + 14;
     let actions_h = 74;
@@ -1178,7 +1219,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         let secs = sess.started_at.elapsed().as_secs();
         format!("■  RUNNING ({:02}:{:02}) — STOP", secs / 60, secs % 60)
     } else {
-        "▶  LAUNCH Title".into()
+        "▶  LAUNCH Game Master 6".into()
     };
     let play_sub = format!(
         "{}  ·  {}  ·  {}  ·  {}",
@@ -1313,7 +1354,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         let hud_lbl = format!("HUD: {}", ctx.settings.hud_mode_label());
         draw_button(hdc, hud_r, &hud_lbl, ctx.fonts.small_bold, ctx.hover == Target::CycleHudMode, COL_CYAN, Target::CycleHudMode, hits);
 
-        let km_r = RECT::new(hud_r.left - 156, note_y - 2, hud_r.left - 8, note_y + 24);
+        let km_r = RECT::new(hud_r.left - 184, note_y - 2, hud_r.left - 8, note_y + 24);
         let km_lbl = format!("KEYS: {}", crate::keymap::KeymapPreset::from_id(&ctx.settings.keymap_preset).label());
         draw_button(hdc, km_r, &km_lbl, ctx.fonts.small_bold, ctx.hover == Target::CycleKeymapPreset, COL_MUTED, Target::CycleKeymapPreset, hits);
 
@@ -1321,7 +1362,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         let pin_lbl = if ctx.settings.pinned_baseline_locked { "BASELINE LOCKED" } else { "PIN BASELINE" };
         draw_button(hdc, pin_r, pin_lbl, ctx.fonts.small_bold, ctx.hover == Target::PinBaseline, if ctx.settings.pinned_baseline_locked { COL_EMERALD } else { COL_CYAN }, Target::PinBaseline, hits);
 
-        let rb_r = RECT::new(pin_r.left - 110, note_y - 2, pin_r.left - 8, note_y + 24);
+        let rb_r = RECT::new(pin_r.left - 106, note_y - 2, pin_r.left - 8, note_y + 24);
         draw_button(hdc, rb_r, "ROLLBACK", ctx.fonts.small_bold, ctx.hover == Target::RollbackBaseline, COL_AMBER, Target::RollbackBaseline, hits);
 
         let foot = format!("{} · {}", ctx.playtime_label, ctx.sys.gpu_arch.label());
@@ -1434,7 +1475,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
                 rec.runner, rec.console, rec.duration_secs, rec.peak_fps
             )
         } else {
-            "No completed session recorded yet — launch Title to benchmark.".into()
+            "No completed session recorded yet — launch Game Master 6 to benchmark.".into()
         };
         draw_text(
             hdc,
@@ -1559,28 +1600,54 @@ unsafe fn draw_runners(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(R
         let del_r = RECT::new(badge_r.left - 50, cr.top + 14, badge_r.left - 6, cr.bottom - 14);
         let in_runners = run.path.starts_with(&runners_root);
         let show_del = in_runners && !is_active;
-        let text_right = if run.has_backup {
-            del_r.left - 90
-        } else if show_del {
-            del_r.left - 8
-        } else {
-            badge_r.left - 8
-        };
-
         let slug_chk = crate::runners::runner_slug(&run.path, run.kind);
         let prof_tag = if Settings::has_runner_profile(&slug_chk) { " · PROF" } else { "" };
+        let dlss_ready = crate::runners::has_dlss_dlls_beside(&run.path);
+        let has_sdk_script = !dlss_ready
+            && Settings::app_dir()
+                .join("runners_src")
+                .join(&slug_chk)
+                .join("scripts")
+                .join("get-nvidia-sdks.ps1")
+                .is_file();
+        let has_update = !run.repo.is_empty();
+        let mut btn_right = if show_del { del_r.left - 6 } else { badge_r.left - 6 };
+        let rb_r_opt = if run.has_backup {
+            let rr = RECT::new(btn_right - 78, cr.top + 14, btn_right, cr.bottom - 14);
+            btn_right = rr.left - 6;
+            Some(rr)
+        } else {
+            None
+        };
+        let upd_r_opt = if has_update {
+            let ur = RECT::new(btn_right - 68, cr.top + 14, btn_right, cr.bottom - 14);
+            btn_right = ur.left - 6;
+            Some(ur)
+        } else {
+            None
+        };
+        let sdk_r_opt = if has_sdk_script {
+            let sr = RECT::new(btn_right - 80, cr.top + 14, btn_right, cr.bottom - 14);
+            btn_right = sr.left - 6;
+            Some(sr)
+        } else {
+            None
+        };
+        let text_right = btn_right - 6;
+
         let title_str = if !run.commit.is_empty() {
             format!("{}  ·  @{}{}", run.name, run.commit, prof_tag)
         } else {
             format!("{}{}", run.name, prof_tag)
         };
         draw_text(hdc, &title_str, RECT::new(cr.left + 12, cr.top + 6, text_right.max(cr.left + 120), cr.top + 26), ctx.fonts.body_bold, COL_WHITE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        let dlss_tag = if dlss_ready { "  ·  DLSS / FG READY (F1 MENU · F3 STATS)" } else { "" };
         let sub_r = if !run.built_at.is_empty() {
-            format!("{}  ·  Updated {}  ·  Cache: {}", run.size_label, run.built_at, run.cache_label)
+            format!("{}  ·  Updated {}  ·  Cache: {}{}", run.size_label, run.built_at, run.cache_label, dlss_tag)
         } else {
-            format!("{}  ·  Cache: {}", run.size_label, run.cache_label)
+            format!("{}  ·  Cache: {}{}", run.size_label, run.cache_label, dlss_tag)
         };
-        draw_text(hdc, &sub_r, RECT::new(cr.left + 12, cr.top + 30, text_right.max(cr.left + 120), cr.bottom - 6), ctx.fonts.small, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        draw_text(hdc, &sub_r, RECT::new(cr.left + 12, cr.top + 30, text_right.max(cr.left + 120), cr.bottom - 6), ctx.fonts.small, if dlss_ready { COL_EMERALD } else { COL_MUTED }, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
         if is_active {
             draw_button(hdc, badge_r, ctx.settings.active_runner_kind().badge(), ctx.fonts.small_bold, ctx.hover == Target::CycleRunnerKind, COL_CYAN, Target::CycleRunnerKind, hits);
@@ -1590,10 +1657,14 @@ unsafe fn draw_runners(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(R
         if show_del {
             draw_button(hdc, del_r, "DEL", ctx.fonts.small_bold, ctx.hover == Target::DeleteRunner(idx), COL_CORAL, Target::DeleteRunner(idx), hits);
         }
-        if run.has_backup {
-            let rb_right = if show_del { del_r.left - 6 } else { badge_r.left - 6 };
-            let rb_r = RECT::new(rb_right - 78, cr.top + 14, rb_right, cr.bottom - 14);
+        if let Some(rb_r) = rb_r_opt {
             draw_button(hdc, rb_r, "ROLLBACK", ctx.fonts.small_bold, ctx.hover == Target::RollbackRunner(idx), COL_AMBER, Target::RollbackRunner(idx), hits);
+        }
+        if let Some(upd_r) = upd_r_opt {
+            draw_button(hdc, upd_r, "UPDATE", ctx.fonts.small_bold, ctx.hover == Target::UpdateRunner(idx), COL_CYAN, Target::UpdateRunner(idx), hits);
+        }
+        if let Some(sdk_r) = sdk_r_opt {
+            draw_button(hdc, sdk_r, "GET DLSS", ctx.fonts.small_bold, ctx.hover == Target::FetchNvidiaSdks(idx), COL_EMERALD, Target::FetchNvidiaSdks(idx), hits);
         }
         y += 64;
     }
@@ -1631,7 +1702,7 @@ Click SYNC LIVE to retry or PORTWATCH VI to open in browser."),
         let msg = if ctx.portwatch_syncing {
             "Fetching live standings from https://portwatch-vi.xyz/tracker.json ..."
         } else {
-            "Click SYNC LIVE to scan the latest Title PC ports, forks, and ray-tracing builds from portwatch-vi.xyz."
+            "Click SYNC LIVE to scan the latest Game Master 6 PC ports, forks, and ray-tracing builds from portwatch-vi.xyz."
         };
         draw_text(hdc, msg, RECT::new(right_r.left + 16, right_r.top + 48, right_r.right - 16, right_r.top + 120), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_WORDBREAK);
         return;
@@ -2051,7 +2122,7 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
         ("AMBIENT SHADE", "GI shade fill + crease AO", ctx.settings.ambient_fill, false, if ctx.settings.ambient_fill { "ON" } else { "OFF" }, Target::ToggleAmbientFill),
         ("BVH BUILDER", "Ray-trace BVH acceleration", ctx.settings.bvh_builder, true, if ctx.settings.bvh_builder { "ON" } else { "OFF" }, Target::ToggleBvhBuilder),
         ("FLOAT HUD", hud_sub, ctx.settings.hud_overlay, false, if ctx.settings.hud_overlay { "ON" } else { "OFF" }, Target::ToggleHudOverlay),
-        ("Standard RETICLE", "Center dot + auto menu cursor", ctx.settings.kbm_crosshair, false, if ctx.settings.kbm_crosshair { "ON" } else { "OFF" }, Target::ToggleKbmCrosshair),
+        ("Open-World RETICLE", "Center dot + auto menu cursor", ctx.settings.kbm_crosshair, false, if ctx.settings.kbm_crosshair { "ON" } else { "OFF" }, Target::ToggleKbmCrosshair),
     ];
     let s4_on = s4_items.iter().filter(|x| x.2).count();
     draw_sec_hdr(hdc, 3, "SECTION 4 · DISPLAY, VISUALS & HUD", s4_on, s4_items.len(), y, &mut card_hits);
@@ -2290,7 +2361,7 @@ unsafe fn draw_logs(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
                 draw_text(hdc, &l2, RECT::new(br.left + 8, br.top + 28, br.right - 8, br.bottom - 4), ctx.fonts.small, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             }
         } else {
-            draw_text(hdc, "COMPARE LAST 2 RUNS: Need at least 2 GM6-*.log files in logs\\ (use BENCHMARK RUN for full FPS telemetry).", RECT::new(cmp_r.left + 14, cmp_r.top + 10, cmp_r.right - 14, cmp_r.bottom - 10), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_VCENTER | DT_WORDBREAK);
+            draw_text(hdc, "COMPARE LAST 2 RUNS: Need at least 2 Session-*.log files in logs\\ (use BENCHMARK RUN for full FPS telemetry).", RECT::new(cmp_r.left + 14, cmp_r.top + 10, cmp_r.right - 14, cmp_r.bottom - 10), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_VCENTER | DT_WORDBREAK);
         }
         term_r.top += 102;
     }
@@ -2310,7 +2381,7 @@ unsafe fn draw_logs(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         fx += fw + 6;
     }
     let cp_r = RECT::new(fbar.right - 108, fbar.top, fbar.right, fbar.bottom - 2);
-    draw_button(hdc, cp_r, "COPY TAIL", ctx.fonts.small_bold, ctx.hover == Target::CopyLogSlice, COL_EMERALD, Target::CopyLogSlice, hits);
+    draw_button(hdc, cp_r, "COPY TAIL", ctx.fonts.small_bold, ctx.hover == Target::CopySessionTail, COL_EMERALD, Target::CopySessionTail, hits);
     term_r.top += 34;
 
     rounded_rect(hdc, term_r, rgb(10, 8, 18), COL_BORDER, 12);
@@ -2518,7 +2589,7 @@ unsafe fn draw_bench_input(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Ve
     draw_text(hdc, "SESSION BENCHMARK LEADERBOARD", RECT::new(right_r.left + 14, right_top, right_r.right - 14, right_top + 20), ctx.fonts.small_bold, COL_ORANGE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     if ctx.recent_sessions.is_empty() {
-        draw_text(hdc, "No recorded sessions yet.\n\nLaunch Title and play for a few seconds — Game Master automatically logs FPS, duration, exit code, and slowest shader per runner.", RECT::new(right_r.left + 16, right_top + 26, right_r.right - 16, right_r.bottom - 16), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_WORDBREAK);
+        draw_text(hdc, "No recorded sessions yet.\n\nLaunch Game Master 6 and play for a few seconds — Game Master automatically logs FPS, duration, exit code, and slowest shader per runner.", RECT::new(right_r.left + 16, right_top + 26, right_r.right - 16, right_r.bottom - 16), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_WORDBREAK);
         return;
     }
 
@@ -2758,7 +2829,7 @@ unsafe fn draw_dock(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
             hits,
         );
     } else {
-        draw_text(hdc, "System ready. Press LAUNCH Title (or Ctrl+L) to start, or PREPARE CACHE before your first session.", RECT::new(feed_r.left + 18, feed_r.top + 52, feed_r.right - 18, feed_r.bottom - 14), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_WORDBREAK);
+        draw_text(hdc, "System ready. Press LAUNCH Game Master 6 (or Ctrl+L) to start, or PREPARE CACHE before your first session.", RECT::new(feed_r.left + 18, feed_r.top + 52, feed_r.right - 18, feed_r.bottom - 14), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_WORDBREAK);
     }
 
     // Right: Launch Command Deck
@@ -2777,7 +2848,7 @@ unsafe fn draw_dock(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         FrameRect(hdc, &btn_r, br);
         DeleteObject(br);
     }
-    let btn_label = if active { "STOP RUNNER" } else { "LAUNCH Title" };
+    let btn_label = if active { "STOP RUNNER" } else { "LAUNCH Game Master 6" };
     draw_text(hdc, btn_label, btn_r, ctx.fonts.title, COL_WHITE, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     hits.push((btn_r, Target::LaunchOrStop));
 

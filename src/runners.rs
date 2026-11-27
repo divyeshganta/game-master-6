@@ -33,7 +33,7 @@ impl RunnerKind {
 
     pub fn badge(self) -> &'static str {
         match self {
-            RunnerKind::Baseline => "BASELINE",
+            RunnerKind::Baseline => "BASELINE · BASELINE",
             RunnerKind::LocalZtrx => "LOCAL ZTRX",
             RunnerKind::VictoryFork => "VICTORY-FORK · RT",
             RunnerKind::Victory => "VICTORY UPSTREAM",
@@ -185,6 +185,21 @@ pub fn read_runner_meta(exe_path: &Path) -> RunnerMeta {
     let Some(parent) = exe_path.parent() else {
         return meta;
     };
+    let json_path = parent.join("runner-meta.json");
+    if let Ok(jtxt) = fs::read_to_string(&json_path) {
+        if let Some(r) = extract_json_str(&jtxt, "repo") {
+            meta.repo = r;
+        }
+        if let Some(c) = extract_json_str(&jtxt, "commit") {
+            meta.commit = c;
+        }
+        if let Some(b) = extract_json_str(&jtxt, "built_at") {
+            meta.built_at = b;
+        }
+        if !meta.repo.is_empty() || !meta.commit.is_empty() {
+            return meta;
+        }
+    }
     let meta_path = parent.join(".gm-meta");
     let Ok(text) = fs::read_to_string(&meta_path) else {
         return meta;
@@ -200,6 +215,47 @@ pub fn read_runner_meta(exe_path: &Path) -> RunnerMeta {
         }
     }
     meta
+}
+
+fn extract_json_str(json: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\"");
+    let idx = json.find(&needle)?;
+    let rest = &json[idx + needle.len()..];
+    let colon = rest.find(':')?;
+    let after = rest[colon + 1..].trim_start();
+    if !after.starts_with('"') {
+        return None;
+    }
+    let mut out = String::new();
+    let mut esc = false;
+    for ch in after[1..].chars() {
+        if esc {
+            out.push(ch);
+            esc = false;
+        } else if ch == '\\' {
+            esc = true;
+        } else if ch == '"' {
+            return Some(out);
+        } else {
+            out.push(ch);
+        }
+    }
+    None
+}
+
+fn extract_json_bool(json: &str, key: &str) -> Option<bool> {
+    let needle = format!("\"{key}\"");
+    let idx = json.find(&needle)?;
+    let rest = &json[idx + needle.len()..];
+    let colon = rest.find(':')?;
+    let after = rest[colon + 1..].trim_start();
+    if after.starts_with("true") {
+        Some(true)
+    } else if after.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
 }
 
 pub fn runner_slug(path: &Path, kind: RunnerKind) -> String {
@@ -339,8 +395,8 @@ pub fn discover_runners(s: &Settings) -> Vec<DiscoveredRunner> {
         "xcl.exe",
         "xbox2windows.exe",
         "tuxbox.exe",
-        "consolex.exe",
-        "openconsole.exe",
+        "console-runner.exe",
+        "open-console.exe",
     ] {
         push_candidate(app.join(fname), None);
     }
@@ -430,10 +486,15 @@ pub fn backup_path_for(exe_path: &Path) -> PathBuf {
 
 pub fn rollback_runner(exe_path: &Path) -> Result<(), String> {
     let bak = backup_path_for(exe_path);
-    if !bak.is_file() {
-        return Err(format!("No backup found at {}", bak.display()));
-    }
-    fs::copy(&bak, exe_path).map_err(|e| format!("Could not restore backup: {e}"))?;
+    let side_bak = exe_path.with_extension("exe.bak");
+    let src = if bak.is_file() {
+        bak
+    } else if side_bak.is_file() {
+        side_bak
+    } else {
+        return Err(format!("No backup found at {} or {}", bak.display(), side_bak.display()));
+    };
+    fs::copy(&src, exe_path).map_err(|e| format!("Could not restore backup: {e}"))?;
     Ok(())
 }
 
@@ -570,5 +631,192 @@ pub fn write_cache_hash(runner_path: &Path, cache_dir: &Path) {
     if let Some(hash) = sha256_file_hex(runner_path) {
         let _ = fs::create_dir_all(cache_dir);
         let _ = fs::write(cache_dir.join(".runner_hash"), hash);
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RunnerProfile {
+    pub name: String,
+    pub kind: String,
+    pub extra_args: String,
+    pub env: Vec<(String, String)>,
+    pub supports_shaders: Option<bool>,
+    pub supports_warm: Option<bool>,
+}
+
+pub fn load_runner_profile(exe_path: &Path) -> Option<RunnerProfile> {
+    let parent = exe_path.parent()?;
+    let path = parent.join("runner-profile.json");
+    let text = fs::read_to_string(path).ok()?;
+    Some(parse_runner_profile_json(&text))
+}
+
+pub fn parse_runner_profile_json(json: &str) -> RunnerProfile {
+    let mut prof = RunnerProfile {
+        name: extract_json_str(json, "name").unwrap_or_default(),
+        kind: extract_json_str(json, "kind").unwrap_or_default(),
+        extra_args: extract_json_str(json, "extra_args").unwrap_or_default(),
+        env: Vec::new(),
+        supports_shaders: extract_json_bool(json, "supports_shaders"),
+        supports_warm: extract_json_bool(json, "supports_warm"),
+    };
+    if let Some(idx) = json.find("\"env\"") {
+        let rest = &json[idx + 5..];
+        if let Some(open) = rest.find('{') {
+            if let Some(close) = rest[open..].find('}') {
+                let block = &rest[open + 1..open + close];
+                for pair in block.split(',') {
+                    if let Some((k_raw, v_raw)) = pair.split_once(':') {
+                        let k = k_raw.trim().trim_matches('"').trim();
+                        let v = v_raw.trim().trim_matches('"').trim();
+                        if !k.is_empty() {
+                            prof.env.push((k.to_string(), v.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    prof
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RunnerCapabilities {
+    pub has_shaders: bool,
+    pub has_warm: bool,
+    pub has_translate: bool,
+    pub has_upscaler_check: bool,
+    pub has_dlss_dlls: bool,
+    pub has_victory_settings: bool,
+    pub has_sdk_fetcher: bool,
+    pub profile: Option<RunnerProfile>,
+}
+
+pub fn parse_help_capabilities(help_text: &str) -> RunnerCapabilities {
+    let mut caps = RunnerCapabilities::default();
+    for line in help_text.lines() {
+        let trimmed = line.trim();
+        let first_word = trimmed.split_whitespace().next().unwrap_or("");
+        match first_word {
+            "shaders" => caps.has_shaders = true,
+            "warm" => caps.has_warm = true,
+            "translate" => caps.has_translate = true,
+            "upscaler-check" => caps.has_upscaler_check = true,
+            _ => {}
+        }
+    }
+    caps
+}
+
+pub fn has_dlss_dlls_beside(exe_path: &Path) -> bool {
+    let Some(dir) = exe_path.parent() else {
+        return false;
+    };
+    dir.join("sl.interposer.dll").is_file() || dir.join("nvngx_dlss.dll").is_file()
+}
+
+pub fn parse_victory_settings(path: &Path) -> Vec<(String, String)> {
+    let Ok(text) = fs::read_to_string(path) else {
+        return Vec::new();
+    };
+    let mut out = Vec::new();
+    for line in text.lines() {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = t.split_once('=') {
+            let key = k.trim().to_string();
+            if !key.is_empty() {
+                out.push((key, v.trim().to_string()));
+            }
+        }
+    }
+    out
+}
+
+pub fn probe_runner_capabilities(exe_path: &Path) -> RunnerCapabilities {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let mut caps = if let Ok(out) = std::process::Command::new(exe_path)
+        .arg("--help")
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
+        let combined = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        parse_help_capabilities(&combined)
+    } else {
+        RunnerCapabilities::default()
+    };
+    caps.has_dlss_dlls = has_dlss_dlls_beside(exe_path);
+    if let Some(parent) = exe_path.parent() {
+        caps.has_victory_settings = parent.join("victory-settings.txt").is_file();
+        if let Some(slug) = parent.file_name().and_then(|s| s.to_str()) {
+            let sdk_script = Settings::app_dir()
+                .join("runners_src")
+                .join(slug)
+                .join("scripts")
+                .join("get-nvidia-sdks.ps1");
+            caps.has_sdk_fetcher = sdk_script.is_file();
+        }
+    }
+    if let Some(prof) = load_runner_profile(exe_path) {
+        if let Some(s) = prof.supports_shaders {
+            caps.has_shaders = s;
+        }
+        if let Some(w) = prof.supports_warm {
+            caps.has_warm = w;
+        }
+        caps.profile = Some(prof);
+    }
+    caps
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn help_probe_detects_shaders_warm_translate_and_upscaler_check() {
+        let sample = "\
+Commands:
+  translate       Run every shader found
+  shaders         Translate every shader found into the shader cache
+  warm            Make the host pipelines of every pipeline the title ever created
+  upscaler-check  Check NVIDIA Streamline, DLSS and DLSS Frame Generation
+  run             Prepare, map and bind a title executable
+";
+        let caps = parse_help_capabilities(sample);
+        assert!(caps.has_shaders);
+        assert!(caps.has_warm);
+        assert!(caps.has_translate);
+        assert!(caps.has_upscaler_check);
+    }
+
+    #[test]
+    fn runner_profile_json_parses_fields_and_env() {
+        let json = r#"{
+  "name": "Kelvaroq Experimental",
+  "kind": "victory",
+  "extra_args": "--fast-boot",
+  "supports_shaders": true,
+  "supports_warm": false,
+  "env": {
+    "VICTORY_HOST_WAVE": "32",
+    "VICTORY_LOG": "warn"
+  }
+}"#;
+        let prof = parse_runner_profile_json(json);
+        assert_eq!(prof.name, "Kelvaroq Experimental");
+        assert_eq!(prof.kind, "victory");
+        assert_eq!(prof.extra_args, "--fast-boot");
+        assert_eq!(prof.supports_shaders, Some(true));
+        assert_eq!(prof.supports_warm, Some(false));
+        assert!(prof.env.contains(&("VICTORY_HOST_WAVE".into(), "32".into())));
+        assert!(prof.env.contains(&("VICTORY_LOG".into(), "warn".into())));
     }
 }

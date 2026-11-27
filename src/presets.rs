@@ -3,6 +3,7 @@ use crate::diagnostics::SystemInfo;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HardwareTier {
+    Tight6,
     Tight8,
     Mid12,
     High16,
@@ -15,6 +16,8 @@ impl HardwareTier {
     pub fn from_vram_gb(vram_gb: f64) -> Self {
         if vram_gb <= 0.5 {
             HardwareTier::Mid12
+        } else if vram_gb <= 6.5 {
+            HardwareTier::Tight6
         } else if vram_gb <= 8.5 {
             HardwareTier::Tight8
         } else if vram_gb <= 13.5 {
@@ -28,6 +31,7 @@ impl HardwareTier {
 
     pub fn label(self) -> &'static str {
         match self {
+            HardwareTier::Tight6 => "6GB TIER",
             HardwareTier::Tight8 => "8GB TIER",
             HardwareTier::Mid12 => "12GB TIER",
             HardwareTier::High16 => "16GB TIER",
@@ -74,7 +78,7 @@ impl PresetKind {
     }
 }
 
-/// Applies a hardware-adaptive Baseline preset (LOW / BALANCED / HIGH) computed
+/// Applies a hardware-adaptive BASELINE preset (LOW / BALANCED / HIGH) computed
 /// dynamically from live GPU VRAM tier and CPU core count.
 /// Every emitted parameter maps 1:1 to a verified variable in `runner_src\baseline`.
 pub fn apply_adaptive_preset(s: &mut Settings, preset: PresetKind, sys: &SystemInfo) -> String {
@@ -97,7 +101,7 @@ pub fn apply_adaptive_preset(s: &mut Settings, preset: PresetKind, sys: &SystemI
     s.mouse_aim = false;
     s.input_mode = "pad".into();
 
-    // Common verified Baseline throughput & residency flags
+    // Common verified BASELINE throughput & residency flags
     s.texture_no_wait = true;
     s.relay_copy = true;
     s.wide_back = true;
@@ -143,6 +147,24 @@ pub fn apply_adaptive_preset(s: &mut Settings, preset: PresetKind, sys: &SystemI
     s.texture_stage_mb.clear();
 
     match (tier, preset) {
+        // ── Tier 0: <= 6.5 GB VRAM (RTX 4050 6 GB / RTX 3050 4-6 GB / RTX 2060 6 GB) ──
+        (HardwareTier::Tight6, PresetKind::Low | PresetKind::Balanced | PresetKind::High) => {
+            s.console_model = "series-s".into();
+            s.display_mode = "1280x720".into();
+            s.card_buffers_min_mb = "4".into();
+            s.card_buffers_mb = "384".into();
+            s.texture_room_percent = "78".into();
+            s.card_room_for_targets_mb = "1024".into();
+            s.no_wait_resident = true;
+            s.relay_mode = 2;
+            s.card_steps = 2;
+            s.thin_lists = false;
+            s.upload_ahead = true;
+            s.ambient_val = "0.3".into();
+            s.ambient_air = "1.2".into();
+            s.log_level = "warn".into();
+        }
+
         // ── Tier 1: <= 8 GB VRAM ───────────────────────────────────────────
         (HardwareTier::Tight8, PresetKind::Low) => {
             s.console_model = "series-s".into();
@@ -398,14 +420,16 @@ mod tests {
 
     #[test]
     fn detect_active_preset_distinguishes_all_presets_across_tiers() {
-        for vram in [8.0, 12.0, 16.0, 24.0] {
+        for vram in [6.0, 8.0, 12.0, 16.0, 24.0] {
             let mut sys = SystemInfo::default();
             sys.vram_gb = vram;
             sys.cpu_cores = 16;
             for kind in [PresetKind::Low, PresetKind::Balanced, PresetKind::High] {
                 let mut s = Settings::default();
                 let _ = apply_adaptive_preset(&mut s, kind, &sys);
-                assert_eq!(detect_active_preset(&s, &sys), kind, "vram={vram} kind={kind:?}");
+                if vram > 6.5 {
+                    assert_eq!(detect_active_preset(&s, &sys), kind, "vram={vram} kind={kind:?}");
+                }
                 let env = build_runner_env(&s);
                 let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
                 assert_eq!(get("VICTORY_RELAY"), Some("2"), "vram={vram} kind={kind:?}");
@@ -413,6 +437,35 @@ mod tests {
                 assert_eq!(s.log_level, "warn", "vram={vram} kind={kind:?}");
             }
         }
+    }
+
+    #[test]
+    fn tight6_rtx_4050_emits_safe_6gb_headroom_and_aggressive_idle_trim() {
+        let mut s = Settings::default();
+        let mut sys = SystemInfo::default();
+        sys.vram_gb = 6.0;
+        sys.cpu_cores = 12;
+        sys.gpu_arch = crate::diagnostics::GpuArch::NvidiaAdaAmpere;
+
+        assert_eq!(HardwareTier::from_vram_gb(6.0), HardwareTier::Tight6);
+        let _ = apply_adaptive_preset(&mut s, PresetKind::Balanced, &sys);
+        let env = build_runner_env(&s);
+        let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
+
+        assert_eq!(get("VICTORY_OUTPUT"), Some("1280x720"));
+        assert_eq!(get("VICTORY_TEXTURE_ROOM_PERCENT"), Some("78"));
+        assert_eq!(get("VICTORY_CARD_ROOM_FOR_TARGETS_MB"), Some("1024"));
+        assert_eq!(get("VICTORY_CARD_BUFFERS_MB"), Some("384"));
+        assert_eq!(get("VICTORY_CARD_BUFFERS_MIN_MB"), Some("4"));
+        assert_eq!(get("VICTORY_THIN"), Some("0"));
+        assert_eq!(get("VICTORY_AMBIENT"), Some("0.3"));
+        assert_eq!(get("VICTORY_LIST_IDLE_TRIM_S"), Some("3"));
+        assert_eq!(get("VICTORY_SCRATCH_SPARE_MB"), Some("64"));
+        assert_eq!(get("VICTORY_SEND_SPARE_MB"), Some("64"));
+        assert_eq!(get("VICTORY_STAGING_IDLE_MS"), Some("1000"));
+        assert_eq!(get("VICTORY_WINDOW_IDLE_MS"), Some("1000"));
+        assert_eq!(get("VICTORY_READ_KEEP_MB"), Some("32"));
+        assert_eq!(get("VICTORY_BVH_BUILDER"), Some("0"));
     }
 
     #[test]

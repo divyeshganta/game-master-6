@@ -17,7 +17,7 @@ fn is_ztrx_runner(path: &Path) -> bool {
         .any(|c| c.as_os_str().to_string_lossy().eq_ignore_ascii_case("ztrx"))
 }
 
-/// Builds the exact, deduplicated list of verified Baseline environment variables
+/// Builds the exact, deduplicated list of verified BASELINE environment variables
 /// directly from `Settings` (zero hardcoded bypasses, zero stale/dead flags).
 pub fn build_runner_env(s: &Settings) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
@@ -41,7 +41,7 @@ pub fn build_runner_env(s: &Settings) -> Vec<(String, String)> {
                 "1280x720" | "1664x936" | "1920x1080" | "2560x1440" | "3840x2160"
             );
             let safe_for_console = !s.console_model.eq_ignore_ascii_case("series-s")
-                || matches!(mapped, "1920x1080" | "2560x1440" | "3840x2160");
+                || matches!(mapped, "1280x720" | "1920x1080" | "2560x1440" | "3840x2160");
             if valid_mode && safe_for_console {
                 set("VICTORY_OUTPUT", mapped.to_string());
             }
@@ -151,6 +151,8 @@ pub fn build_runner_env(s: &Settings) -> Vec<(String, String)> {
     }
     if s.bvh_builder {
         set("VICTORY_BVH_BUILDER", "1".into());
+    } else {
+        set("VICTORY_BVH_BUILDER", "0".into());
     }
     if let Some(ab_val) = crate::ab_bench::AbExperiment::from_id(&s.ab_experiment).env_value() {
         set("VICTORY_AB", ab_val.to_string());
@@ -159,12 +161,24 @@ pub fn build_runner_env(s: &Settings) -> Vec<(String, String)> {
     // Verified overnight cool_fox Port 6/7 & memory-trimming wins
     set("VICTORY_PORT_GUARD", "1".into());
     set("VICTORY_PORT_JOURNAL", "1".into());
-    set("VICTORY_LIST_IDLE_TRIM_S", "5".into());
-    set("VICTORY_SCRATCH_SPARE_MB", "128".into());
-    set("VICTORY_SEND_SPARE_MB", "128".into());
-    set("VICTORY_STAGING_IDLE_MS", "2000".into());
-    set("VICTORY_WINDOW_IDLE_MS", "2000".into());
-    set("VICTORY_READ_KEEP_MB", "64".into());
+    set("VICTORY_PORT_CONSTANTS", "0".into());
+    set("VICTORY_PORT_CBV", "0".into());
+    if s.card_buffers_mb.trim() == "384" {
+        // Tight6 (6 GB VRAM) aggressive idle trim
+        set("VICTORY_LIST_IDLE_TRIM_S", "3".into());
+        set("VICTORY_SCRATCH_SPARE_MB", "64".into());
+        set("VICTORY_SEND_SPARE_MB", "64".into());
+        set("VICTORY_STAGING_IDLE_MS", "1000".into());
+        set("VICTORY_WINDOW_IDLE_MS", "1000".into());
+        set("VICTORY_READ_KEEP_MB", "32".into());
+    } else {
+        set("VICTORY_LIST_IDLE_TRIM_S", "5".into());
+        set("VICTORY_SCRATCH_SPARE_MB", "128".into());
+        set("VICTORY_SEND_SPARE_MB", "128".into());
+        set("VICTORY_STAGING_IDLE_MS", "2000".into());
+        set("VICTORY_WINDOW_IDLE_MS", "2000".into());
+        set("VICTORY_READ_KEEP_MB", "64".into());
+    }
 
     // Custom user env overrides always win last (KEY=VAL;KEY2=VAL2)
     for pair in s.custom_env.split(';') {
@@ -284,7 +298,7 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
 
     let log_dir = logs_dir();
     let stamp = local_timestamp_filename();
-    let log_path = log_dir.join(format!("GM6-{stamp}.log"));
+    let log_path = log_dir.join(format!("Session-{stamp}.log"));
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -310,7 +324,7 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
     };
 
     let header = format!(
-        "=== Game Master 6 v1.2 session ({})\n\
+        "=== Game Master 6 v1.3 session ({})\n\
          exe              : {}\n\
          game_dir         : {}\n\
          runner           : {}\n\
@@ -353,7 +367,6 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
 
     let runner_path = s.resolved_runner();
     let kind = s.active_runner_kind();
-    let cache_dir = cache_dir_for(&runner_path, kind, s.isolated_cache);
     let mut cmd = Command::new(&runner_path);
     let extra_args = split_args(&s.title_args);
 
@@ -369,13 +382,9 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
                 cmd.arg(arg);
             }
         }
-        cmd.env("VICTORY_GAME_DIR", &s.game_dir)
-            .env("VICTORY_LOG", victory_log);
-        for (k, v) in &perf_env_pairs {
+        let launch_env = resolve_victory_launch_env(s, &runner_path, kind, sys);
+        for (k, v) in &launch_env {
             cmd.env(k, v);
-        }
-        if s.isolated_cache {
-            cmd.env("VICTORY_CACHE_DIR", &cache_dir);
         }
         if let Some(ref cdir) = capture_dir {
             cmd.env("VICTORY_CAPTURE", cdir);
@@ -395,7 +404,7 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
         if !s.shader_loop_limit.trim().is_empty() {
             cmd.env("VICTORY_SHADER_LOOP_LIMIT", s.shader_loop_limit.trim());
         }
-        cmd.env("VICTORY_WINDOW_TITLE", "Game Master 6 - Title")
+        cmd.env("VICTORY_WINDOW_TITLE", "Game Master 6")
             .env("VICTORY_WINDOW_ICON", Settings::app_dir().join("logo.ico"));
     } else if kind == crate::runners::RunnerKind::Xcl {
         // Dedicated XCL compatibility layer env/arg mapping (without forcing Victory-only flags)
@@ -559,12 +568,16 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
         .map_err(|e| format!("Cannot create prepare log: {e}"))?;
 
     let runner_path = s.resolved_runner();
-    let use_shaders_cmd = supports_shaders_subcommand(&runner_path);
+    let caps = crate::runners::probe_runner_capabilities(&runner_path);
+    let use_shaders_cmd = caps.has_shaders || supports_shaders_subcommand(&runner_path);
+    let use_warm_cmd = caps.has_warm;
     let ztrx = is_ztrx_runner(&runner_path);
     let lower_runner = runner_path.to_string_lossy().to_ascii_lowercase();
     let baseline = lower_runner.contains("baseline") || lower_runner.contains("overnight-tuned");
     let use_cache_flag = !ztrx && !baseline;
-    let flags_desc = if use_shaders_cmd {
+    let flags_desc = if use_shaders_cmd && use_warm_cmd {
+        format!("shaders --jobs {jobs} && warm")
+    } else if use_shaders_cmd {
         format!("shaders --jobs {jobs}")
     } else if !use_cache_flag {
         format!("translate --pipelines --jobs {jobs}")
@@ -573,7 +586,7 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
     };
 
     let header = format!(
-        "=== Game Master 6 v1.2 shader preparation ({})\n\
+        "=== Game Master 6 v1.3 shader preparation ({})\n\
          runner   : {}\n\
          cmd      : {}\n\
          shaders  : {}\n\
@@ -594,34 +607,63 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
     let err = file.try_clone().map_err(|e| e.to_string())?;
 
     let cache_dir = cache_dir_for(&runner_path, kind, s.isolated_cache);
+    crate::runners::write_cache_hash(&runner_path, &cache_dir);
     let initial_cache_files = count_dir_files(&cache_dir.join("shaders"));
-    let mut pcmd = Command::new(&runner_path);
-    if use_shaders_cmd {
-        pcmd.arg("shaders")
-            .arg("--jobs")
-            .arg(jobs.to_string())
-            .arg(&shaders)
-            .arg(exe)
-            .arg(&bvh)
-            .arg(&upscaler);
-    } else {
-        pcmd.arg("translate");
-        if use_cache_flag {
-            pcmd.arg("--cache");
+    let mut pcmd = if use_shaders_cmd && use_warm_cmd {
+        let mut c = Command::new("powershell");
+        let r_esc = runner_path.to_string_lossy().replace('\'', "''");
+        let s_esc = shaders.to_string_lossy().replace('\'', "''");
+        let e_esc = exe.to_string_lossy().replace('\'', "''");
+        let b_esc = bvh.to_string_lossy().replace('\'', "''");
+        let u_esc = upscaler.to_string_lossy().replace('\'', "''");
+        let ps = format!(
+            "& '{r_esc}' shaders --jobs {jobs} '{s_esc}' '{e_esc}' '{b_esc}' '{u_esc}'; \
+             if ($LASTEXITCODE -eq 0) {{ & '{r_esc}' warm }}"
+        );
+        c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps]);
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            c.creation_flags(0x08000000);
         }
-        pcmd.arg("--pipelines")
-            .arg("--jobs")
-            .arg(jobs.to_string())
-            .arg(&shaders)
-            .arg(exe)
-            .arg(&bvh)
-            .arg(&upscaler);
-    }
+        c
+    } else {
+        let mut c = Command::new(&runner_path);
+        if use_shaders_cmd {
+            c.arg("shaders")
+                .arg("--jobs")
+                .arg(jobs.to_string())
+                .arg(&shaders)
+                .arg(exe)
+                .arg(&bvh)
+                .arg(&upscaler);
+        } else {
+            c.arg("translate");
+            if use_cache_flag {
+                c.arg("--cache");
+            }
+            c.arg("--pipelines")
+                .arg("--jobs")
+                .arg(jobs.to_string())
+                .arg(&shaders)
+                .arg(exe)
+                .arg(&bvh)
+                .arg(&upscaler);
+        }
+        c
+    };
     pcmd.env("VICTORY_LOG", s.effective_victory_log())
+        .env("VICTORY_GAME_DIR", &s.game_dir)
+        .env("VICTORY_HOST_WAVE", "32")
         .stdout(Stdio::from(out))
         .stderr(Stdio::from(err));
     if s.isolated_cache {
         pcmd.env("VICTORY_CACHE_DIR", &cache_dir);
+    }
+    if crate::runners::has_dlss_dlls_beside(&runner_path) {
+        if let Some(parent) = runner_path.parent() {
+            pcmd.env("VICTORY_STREAMLINE_DIR", parent);
+        }
     }
     if !s.shader_loop_limit.trim().is_empty() {
         pcmd.env("VICTORY_SHADER_LOOP_LIMIT", s.shader_loop_limit.trim());
@@ -934,9 +976,103 @@ pub fn run_shader_census(s: &Settings) -> Result<crate::diagnostics::ShaderCensu
     Ok(crate::diagnostics::parse_shader_census(&lines))
 }
 
+/// Resolves the complete Victory-family launch environment:
+/// - Shared save vault (`VICTORY_DATA_DIR`)
+/// - Isolated shader/pipeline cache (`VICTORY_CACHE_DIR`)
+/// - Auto-detected Streamline/DLSS DLLs (`VICTORY_STREAMLINE_DIR`)
+/// - Preserves `F1`-saved settings in `victory-settings.txt` beside the runner
+/// - Applies optional `runner-profile.json` env overrides
+pub fn resolve_victory_launch_env(
+    s: &Settings,
+    runner_path: &Path,
+    kind: crate::runners::RunnerKind,
+    sys: &SystemInfo,
+) -> Vec<(String, String)> {
+    let mut out = build_runner_env(s);
+    let mut set = |k: &str, v: String| {
+        if let Some(existing) = out.iter_mut().find(|(ek, _)| ek == k) {
+            existing.1 = v;
+        } else {
+            out.push((k.to_string(), v));
+        }
+    };
+
+    set("VICTORY_GAME_DIR", s.game_dir.clone());
+    set("VICTORY_LOG", s.effective_victory_log().to_string());
+
+    if sys.gpu_arch != crate::diagnostics::GpuArch::AmdRdna {
+        set("VICTORY_HOST_WAVE", "32".into());
+    }
+
+    if let Some(vault) = crate::saves::shared_save_vault_dir() {
+        set("VICTORY_DATA_DIR", vault.to_string_lossy().into_owned());
+    }
+
+    if s.isolated_cache {
+        let cdir = cache_dir_for(runner_path, kind, true);
+        set("VICTORY_CACHE_DIR", cdir.to_string_lossy().into_owned());
+    }
+
+    if crate::runners::has_dlss_dlls_beside(runner_path) {
+        if let Some(parent) = runner_path.parent() {
+            set("VICTORY_STREAMLINE_DIR", parent.to_string_lossy().into_owned());
+        }
+    }
+
+    if let Some(prof) = crate::runners::load_runner_profile(runner_path) {
+        for (k, v) in prof.env {
+            set(&k, v);
+        }
+    }
+
+    if let Some(parent) = runner_path.parent() {
+        let vs_path = parent.join("victory-settings.txt");
+        if vs_path.is_file() {
+            set("VICTORY_MENU_FILE", vs_path.to_string_lossy().into_owned());
+            for (k, v) in crate::runners::parse_victory_settings(&vs_path) {
+                set(&k, v);
+            }
+        }
+    }
+
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn streamline_and_shared_save_vault_auto_wired_and_f1_settings_preserved() {
+        let tmp = std::env::temp_dir().join(format!("gm_v13_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let exe = tmp.join("victory.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        std::fs::write(tmp.join("sl.interposer.dll"), b"DLL").unwrap();
+        std::fs::write(
+            tmp.join("victory-settings.txt"),
+            "VICTORY_DLSS=1\nVICTORY_DLSS_MODE=quality\nVICTORY_FRAMEGEN=1\nVICTORY_FRAMEGEN_X=3\n",
+        )
+        .unwrap();
+
+        let mut s = Settings::default();
+        s.game_dir = r"D:\TestGame".into();
+        let sys = SystemInfo::default();
+        let env = resolve_victory_launch_env(&s, &exe, crate::runners::RunnerKind::Victory, &sys);
+        let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
+
+        assert_eq!(get("VICTORY_STREAMLINE_DIR"), Some(tmp.to_string_lossy().as_ref()));
+        assert_eq!(get("VICTORY_DLSS"), Some("1"));
+        assert_eq!(get("VICTORY_DLSS_MODE"), Some("quality"));
+        assert_eq!(get("VICTORY_FRAMEGEN"), Some("1"));
+        assert_eq!(get("VICTORY_FRAMEGEN_X"), Some("3"));
+        if let Some(vault) = crate::saves::shared_save_vault_dir() {
+            assert_eq!(get("VICTORY_DATA_DIR"), Some(vault.to_string_lossy().as_ref()));
+        }
+
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
 
     #[test]
     fn shaders_subcommand_detection_and_progress_parsing() {

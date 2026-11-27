@@ -10,3 +10,4 @@ reports/
 config.json
 *.settings
 *.log
+theme.json

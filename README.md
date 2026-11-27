@@ -2,14 +2,14 @@
 
 <img src="assets/banner.png" alt="Game Master 6 Banner" width="100%" />
 
-# Game Master 6
+# Game Master 6 (v1.3.0)
 
 **A lightweight, zero-dependency Windows GUI launcher, hardware-adaptive VRAM preset manager, and live system telemetry frontend for `victory.exe` compatibility runners.**
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-00e5ff?style=for-the-badge&logo=windows)](https://github.com)
 [![Built with](https://img.shields.io/badge/Built%20with-Rust%20%2B%20Win32%20GDI-ff2e93?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-GPL--3.0-22c55e?style=for-the-badge)](LICENSE)
-[![Latest Release](https://img.shields.io/badge/Release-v1.2-f59e0b?style=for-the-badge)](GameMaster6-v1.2-Release.zip)
+[![Latest Release](https://img.shields.io/badge/Release-v1.3.0-f59e0b?style=for-the-badge)](GameMaster6-v1.3-Release.zip)
 
 </div>
 
@@ -17,61 +17,51 @@
 
 ---
 
-## Preview
+## What's New in v1.3.0
 
-### Play Dashboard
-Live hardware telemetry bars (VRAM ceiling, System RAM, Windows Commit/Pagefile), itemized Pre-Flight readiness score, dynamic process-aware System Tip, and last-session activity feed:
-
-<img src="assets/screenshot-play.png" alt="Game Master 6 Play Dashboard" width="100%" />
-
-### Advanced Engineering Tab
-5 collapsible sections with standardized status badges, per-knob descriptions, `VICTORY_TEXTURE_ROOM_PERCENT` selector, and clean vertical scrolling:
-
-<img src="assets/screenshot-advanced.png" alt="Game Master 6 Advanced Engineering Tab" width="100%" />
-
----
-
-## Features
-
-- **Hardware-Adaptive Presets (`LOW` / `BALANCED` / `HIGH`)**: Auto-detects GPU VRAM tier (`8 GB`, `12 GB`, `16 GB`, `24 GB+`) and CPU core count on first launch to configure safe `VICTORY_*` defaults.
-- **1-Click Console Profile Toggle**: Switch between `SERIES-S` and `SERIES-X` directly from the Play tab Preset card for quick A/B testing.
-- **Dynamic Process-Aware System Tip**: Monitors free RAM, Windows commit, top memory-consuming user apps, multi-monitor VRAM overhead, AC/battery power, and shader cache status.
-- **Pre-Flight Readiness & Crash Guardian**: Scores system readiness (`0–100`), classifies known NVIDIA `wave32` runner notes separately from errors, and provides 1-click Last-Known-Good rollback.
-- **Input, Keybinds & Session Telemetry**: Automatic FPS sparkline, runner head-to-head scorecard, log-synced session benchmark leaderboard, and shader translator census.
-- **Zero External Dependencies**: Written in pure Rust (`std` + Win32/GDI/WinINet FFI) with sub-second incremental builds.
+- **Shared Save Vault + Isolated Shader Caches**: All runners share one persistent save directory (`VICTORY_DATA_DIR`, defaulting to `%LOCALAPPDATA%\victory\data`) with rolling 5-slot ZIP backups before launch, while shader/pipeline caches stay strictly isolated per runner (`caches\<runner_id>\`) with SHA-256 `.runner_hash` tracking.
+- **1-Click Runner `UPDATE` + `ROLLBACK`**: Source-built runners store `runner-meta.json` (git URL, branch, commit) and expose 1-click `UPDATE` (backs up `.exe`, `git pull`, `cargo build --release`, updates `.runner_hash`, runs `shaders` + `warm`) and `ROLLBACK`.
+- **Zero-Code-Edit Runner Auto-Detection & DLSS/FG Wiring**: Auto-probes `<runner> --help` for `shaders`, `warm`, `translate`, and `upscaler-check`; automatically chains `shaders --jobs <N>` + `warm` in `PREPARE CACHE`; auto-detects `sl.interposer.dll` / `nvngx_dlss.dll` beside `victory.exe` (`VICTORY_STREAMLINE_DIR`), displays `DLSS / FG READY (F1 MENU · F3 STATS)`, and preserves `F1`-saved `victory-settings.txt`.
+- **Opt-In Official NVIDIA SDK Fetcher**: When `BUILD FROM URL...` clones a repo containing `scripts/get-nvidia-sdks.ps1`, an explicit `GET DLSS` button lets you fetch signed NVIDIA Streamline/DLSS DLLs with 1 click.
+- **5-Tier All-GPU Presets (Including 6 GB RTX 4050)**: Added `Tight6` (`<= 6.5 GB` VRAM) alongside `Tight8`, `Mid12`, `High16`, and `Ultra20`.
+- **Optional Local Skin Overlay (`theme.json`)**: Drop a gitignored `theme.json` + custom `logo.png`/`logo.ico` next to `GameMaster6.exe` to customize accent/background colors locally.
 
 ---
 
 ## Hardware-Adaptive VRAM Tiers
 
-Game Master 6 probes your GPU's dedicated VRAM on first launch and applies a safe `BALANCED` baseline (all tiers keep `VICTORY_RELAY=2`, `VICTORY_CARD_STEPS=2`, and `VICTORY_LOG=warn`):
+Game Master 6 probes your GPU's dedicated VRAM on first launch and applies a safe baseline (`VICTORY_RELAY=2`, `VICTORY_CARD_STEPS=2`, `VICTORY_HOST_WAVE=32` on NVIDIA, `VICTORY_LOG=warn`, Ray Tracing OFF):
 
-| VRAM Tier | Console Default | `BALANCED` Resolution | `TEXTURE_ROOM_PERCENT` | `CARD_ROOM_FOR_TARGETS_MB` | `CARD_BUFFERS_MB` / `MIN_MB` |
-|---|---|---|---|---|---|
-| **8 GB** | `series-s` | `1280x720` | `85%` | `1536` | `512` / `4` |
-| **12 GB** | `series-s` (toggleable) | `1920x1080` (`LOW`: scaled `1280x720` @ `90%`, `HIGH`: `1664x936`) | `94%` | `2560` | `1024` / `4` |
-| **16 GB+** | `series-x` | `1920x1080` | `94%` | `2560` | `1024` / `4` |
+| VRAM Tier | Example GPUs | Console / Output | `TEXTURE_ROOM_PERCENT` | `CARD_ROOM_FOR_TARGETS_MB` | `CARD_BUFFERS_MB` / `MIN_MB` | Notes |
+|---|---|---|---|---|---|---|
+| **6 GB (`Tight6`)** | RTX 4050 6 GB, RTX 3050, RTX 2060 | `series-s` / `1280x720` | `78%` | `1024` | `384` / `4` | Aggressive idle trim (`3s` / `64 MB`) keeping ~400 MB VRAM headroom for 2x DLSS FG or Lossless Scaling (`LSFG`) |
+| **8 GB (`Tight8`)** | RTX 4060, RTX 3060 Ti / 3070 | `series-s` / `1280x720` | `85%` | `1536` | `512` / `4` | `VICTORY_THIN=0` on `LOW` |
+| **12 GB (`Mid12`)** | RTX 5070 Ti 12 GB, RTX 4070, RTX 3060 12 GB | `series-x` or `series-s` / `1920x1080` | `80%` (with DLSS FG) / `90–94%` | `2048–2560` | `1024` / `4` | 1-click `SERIES-S` / `SERIES-X` toggle |
+| **16 GB (`High16`)** | RTX 4080, RTX 5080, RX 7800 XT | `series-x` / `1920x1080–2560x1440` | `94%` | `2560` | `1024–2048` / `4` | Full Series X fidelity |
+| **20 GB+ (`Ultra20`)** | RTX 4090, RTX 5090, RX 7900 XTX | `series-x` / `auto` | `94%` | `2560–3072` | `1024–4096` / `4` | Uncapped headroom |
 
 ---
 
 ## Quick Start (Release ZIP)
 
-1. Download **`GameMaster6-v1.2-Release.zip`** from the GitHub **Releases** tab and extract it to a clean folder (e.g., `C:\Tools\GameMaster6\`).
-2. Run **`GameMaster6.exe`**.
-3. On the **PLAY** tab, click **BROWSE GAME FOLDER...** to select your title directory and executable.
-4. Open **RUNNERS** to select or import your `victory.exe` runner.
-5. Choose **`LOW`**, **`BALANCED`**, or **`HIGH`** and **`SERIES-S` / `SERIES-X`**, click **PREPARE CACHE** once if supported, and press **LAUNCH TITLE**.
+1. Download **`GameMaster6-v1.3-Release.zip`** from **Releases** and extract it to a clean folder (e.g., `C:\Tools\GameMaster6\`).
+2. Run **`GameMaster6.exe`** — it auto-detects your VRAM tier (`6 GB` / `8 GB` / `12 GB` / `16 GB+`).
+3. On **PLAY**, click **BROWSE GAME FOLDER...** to select your title directory and executable.
+4. Open **RUNNERS**:
+   - Select an existing `victory.exe`, drop in a custom `runner-profile.json`, or click **BUILD FROM URL...** to clone and compile a runner from GitHub.
+   - If the runner repo includes `scripts/get-nvidia-sdks.ps1`, click **GET DLSS** on the runner card to fetch official signed NVIDIA Streamline/DLSS DLLs.
+   - Use **UPDATE** or **ROLLBACK** anytime on source-built runners.
+5. Click **PREPARE CACHE** once (runs `shaders --jobs <N>` + `warm` automatically if supported), then click **LAUNCH TITLE**.
+
+### In-Game DLSS & Frame Generation Controls (`F1` / `F3`)
+When `sl.interposer.dll` / `nvngx_dlss.dll` are beside `victory.exe`, the runner card displays **`DLSS / FG READY (F1 MENU · F3 STATS)`**:
+- Press **`F1`** in-game to open the DLSS / **2x–6x Frame Generation** / FPS cap overlay (arrow keys navigate/change, **Enter** confirms, `SAVE AND RESTART NOW` persists to `victory-settings.txt`).
+- Press **`F3`** in-game to toggle the live FPS, frame time, Frame Gen output, draw count, RAM, and VRAM overlay.
 
 ---
 
 ## Building from Source
 
-### Prerequisites
-- **Windows 10 / 11 (x86_64)**
-- **Rust toolchain** via [rustup](https://rustup.rs/) (`stable-x86_64-pc-windows-msvc`)
-- **Visual Studio Build Tools** (or Visual Studio) with the *Desktop development with C++* workload (Windows SDK + MSVC linker)
-
-### Build & Test
 ```powershell
 git clone https://github.com/game-master-6/game-master-6.git
 cd game-master-6
@@ -80,39 +70,3 @@ cargo build --release
 ```
 
 The compiled binary is output to `target\release\GameMaster6.exe`.
-
----
-
-## Project Structure
-
-```text
-src/
-├── main.rs          # Application entry point
-├── ui.rs            # Win32 window loop, event/input handling, background worker polling
-├── render.rs        # Custom Win32 GDI renderer for all tabs, cards, sparklines, and controls
-├── win32.rs         # Raw Win32 FFI bindings (GDI, WinINet, Registry, XInput, Power/Process APIs)
-├── config.rs        # Persistent settings loader/saver and option cyclers
-├── presets.rs       # Hardware-adaptive VRAM-tier presets (8 GB, 12 GB, 16 GB, 24 GB+)
-├── preflight.rs     # Live 0–100 hardware & system readiness scorer
-├── launcher.rs      # Runner environment builder, process launcher, and shader census runner
-├── runners.rs       # Local runner discovery, rollback, and cache directory management
-├── builder.rs       # Automated runner build helper script generator
-├── diagnostics.rs   # System probes, RAM/commit/process tips, log parsing, and debug bundles
-├── telemetry.rs     # Log-synced session history, unified FPS parser, and A/B scorecard
-├── ab_bench.rs      # A/B experiment flag definitions
-├── guardian.rs      # Crash-recovery verdict engine and Last-Known-Good settings snapshot
-├── hud.rs           # Click-through always-on-top performance HUD and center reticle overlay
-├── keymap.rs        # Keyboard/mouse stand-in keymap presets and conflict checker
-├── monitor.rs       # Live process RAM/commit usage sampler
-├── portwatch.rs     # Community runner tracker client (WinINet JSON/HTML + offline fallback)
-├── profiles.rs      # Portable profile import/export
-├── saves.rs         # Save backup/restore and mod toggle helpers
-├── shader_heal.rs   # Shader skip-list / healing helpers
-└── vram_guard.rs    # Background VRAM-heavy process detector
-```
-
----
-
-## Contributing
-
-Contributions are welcome! Please read [CONTRIBUTING.md](CONTRIBUTING.md) for the fork -> branch -> `cargo test` -> Pull Request workflow and repository hygiene rules.

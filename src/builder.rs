@@ -72,7 +72,7 @@ pub fn launch_clone_and_build(repo: &str, name: &str) -> Result<(), String> {
     let ps_script = format!(
         "$ErrorActionPreference = 'Stop'\n\
          Write-Host '============================================================' -ForegroundColor Cyan\n\
-         Write-Host '  Game Master 6 v1.2 — Safe Auto-Builder ({safe_name})' -ForegroundColor Magenta\n\
+         Write-Host '  Game Master 6 v1.3 — Safe Auto-Builder ({safe_name})' -ForegroundColor Magenta\n\
          Write-Host '  Repo: {clone_url}' -ForegroundColor Gray\n\
          Write-Host '============================================================' -ForegroundColor Cyan\n\
          $repoDir = '{repo_dir}'\n\
@@ -201,9 +201,26 @@ pub static D3D12SDKPath: &[u8; 9] = &[0x2E, 0x5C, 0x44, 0x33, 0x44, 0x31, 0x32, 
                  }}\n\
              }}\n\
              $nowStr = (Get-Date).ToString('yyyy-MM-dd HH:mm')\n\
+             $branchName = ''\n\
+             try {{ $branchName = (git rev-parse --abbrev-ref HEAD).Trim() }} catch {{ $branchName = 'main' }}\n\
              $meta = \"repo={owner}/{repo_name}`ncommit=$commitSha`nbuilt_at=$nowStr`n\"\n\
              Set-Content (Join-Path $destDir '.gm-meta') -Value $meta -NoNewline\n\
-             Write-Host ('  -> Wrote version metadata (.gm-meta: ' + $commitSha + ')') -ForegroundColor Green\n\
+             $metaJson = @{{\n\
+                 repo = '{owner}/{repo_name}'\n\
+                 git_url = '{clone_url}'\n\
+                 branch = $branchName\n\
+                 commit = $commitSha\n\
+                 built_at = $nowStr\n\
+             }} | ConvertTo-Json\n\
+             Set-Content (Join-Path $destDir 'runner-meta.json') -Value $metaJson -Encoding UTF8\n\
+             $mainExe = Join-Path $destDir 'victory.exe'\n\
+             if (Test-Path $mainExe) {{\n\
+                 $cDir = Join-Path (Split-Path (Split-Path $destDir -Parent) -Parent) 'caches\\{slug}'\n\
+                 New-Item -ItemType Directory -Force -Path $cDir | Out-Null\n\
+                 $fullHash = (Get-FileHash $mainExe -Algorithm SHA256).Hash.ToLower()\n\
+                 Set-Content (Join-Path $cDir '.runner_hash') -Value $fullHash -NoNewline\n\
+             }}\n\
+             Write-Host ('  -> Wrote runner-meta.json & .gm-meta (' + $commitSha + ')') -ForegroundColor Green\n\
          }}\n\
          Write-Host ''\n\
          Write-Host '[DONE] Game Master will auto-refresh the Hub to UP TO DATE (or click RESCAN).' -ForegroundColor Green\n\
@@ -212,6 +229,7 @@ pub static D3D12SDKPath: &[u8; 9] = &[0x2E, 0x5C, 0x44, 0x33, 0x44, 0x31, 0x32, 
         clone_url = clone_url,
         owner = owner,
         repo_name = repo_name,
+        slug = slug,
         repo_dir = repo_dir.display(),
         dest_dir = dest_dir.display(),
         prev_dir = prev_dir.display(),
@@ -223,7 +241,7 @@ pub static D3D12SDKPath: &[u8; 9] = &[0x2E, 0x5C, 0x44, 0x33, 0x44, 0x31, 0x32, 
         .args([
             "/C",
             "start",
-            "Game Master v1.2 Safe Auto-Builder",
+            "Game Master Safe Auto-Builder",
             "powershell",
             "-NoProfile",
             "-ExecutionPolicy",
@@ -234,5 +252,123 @@ pub static D3D12SDKPath: &[u8; 9] = &[0x2E, 0x5C, 0x44, 0x33, 0x44, 0x31, 0x32, 
         .spawn()
         .map_err(|e| format!("Failed to launch PowerShell builder: {e}"))?;
 
+    Ok(())
+}
+
+/// 1-click UPDATE for source-built runners: backs up `victory.exe` -> `victory.exe.bak` & `prev\victory.exe.bak`,
+/// pulls latest commits, rebuilds release, updates `runner-meta.json` & `.runner_hash`, and runs `shaders` + `warm`.
+pub fn launch_update_runner(exe_path: &std::path::Path, game_dir: &str) -> Result<(), String> {
+    let dest_dir = exe_path.parent().ok_or("Invalid runner folder")?;
+    let meta = crate::runners::read_runner_meta(exe_path);
+    if meta.repo.trim().is_empty() {
+        return Err("No runner-meta.json / .gm-meta repo metadata found for this runner.".into());
+    }
+    let slug = dest_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("custom-runner");
+    let repo_dir = runners_src_dir().join(slug);
+    if !repo_dir.join(".git").is_dir() {
+        return launch_clone_and_build(&meta.repo, slug);
+    }
+    let prev_dir = dest_dir.join("prev");
+    let cache_dir = Settings::app_dir().join("caches").join(slug);
+    let script_path = runners_src_dir().join(format!("update-{slug}.ps1"));
+    let game_dir_esc = game_dir.replace('\'', "''");
+    let ps = format!(
+        "$ErrorActionPreference = 'Stop'\n\
+         $repoDir = '{}'\n\
+         $destDir = '{}'\n\
+         $prevDir = '{}'\n\
+         $cacheDir = '{}'\n\
+         $gameDir = '{}'\n\
+         Write-Host '=== Updating Runner: {slug} ===' -ForegroundColor Cyan\n\
+         Set-Location $repoDir\n\
+         git pull --ff-only\n\
+         $commitSha = (git rev-parse --short HEAD).Trim()\n\
+         $branchName = (git rev-parse --abbrev-ref HEAD).Trim()\n\
+         cargo build --release\n\
+         New-Item -ItemType Directory -Force -Path $prevDir | Out-Null\n\
+         $built = Get-ChildItem -Path 'target\\release' -Filter '*.exe' | Where-Object {{ $_.Name -notmatch '^(xtask|build-script|rustc|cargo|clippy).*\\.exe$' }}\n\
+         foreach ($f in $built) {{\n\
+             $target = Join-Path $destDir $f.Name\n\
+             if (Test-Path $target) {{\n\
+                 Copy-Item $target -Destination (Join-Path $prevDir ($f.Name + '.bak')) -Force\n\
+                 Copy-Item $target -Destination ($target + '.bak') -Force\n\
+             }}\n\
+             Copy-Item $f.FullName -Destination $target -Force\n\
+         }}\n\
+         $nowStr = (Get-Date).ToString('yyyy-MM-dd HH:mm')\n\
+         $metaJson = @{{ repo = '{}'; branch = $branchName; commit = $commitSha; built_at = $nowStr }} | ConvertTo-Json\n\
+         Set-Content (Join-Path $destDir 'runner-meta.json') -Value $metaJson -Encoding UTF8\n\
+         Set-Content (Join-Path $destDir '.gm-meta') -Value \"repo={}`ncommit=$commitSha`nbuilt_at=$nowStr`n\" -NoNewline\n\
+         $exe = Join-Path $destDir 'victory.exe'\n\
+         if (Test-Path $exe) {{\n\
+             New-Item -ItemType Directory -Force -Path $cacheDir | Out-Null\n\
+             $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()\n\
+             Set-Content (Join-Path $cacheDir '.runner_hash') -Value $hash -NoNewline\n\
+             $help = (& $exe --help 2>&1) -join \"`n\"\n\
+             $env:VICTORY_CACHE_DIR = $cacheDir\n\
+             $env:VICTORY_HOST_WAVE = '32'\n\
+             if ($gameDir -and (Test-Path $gameDir) -and ($help -match '(?m)^\\s*shaders\\b')) {{\n\
+                 Write-Host 'Running shaders --jobs 12...' -ForegroundColor Yellow\n\
+                 & $exe shaders --jobs 12 $gameDir\n\
+             }}\n\
+             if ($gameDir -and (Test-Path $gameDir) -and ($help -match '(?m)^\\s*warm\\b')) {{\n\
+                 Write-Host 'Running warm...' -ForegroundColor Yellow\n\
+                 $env:VICTORY_GAME_DIR = $gameDir\n\
+                 & $exe warm\n\
+             }}\n\
+         }}\n\
+         Write-Host 'Update complete!' -ForegroundColor Green\n\
+         Read-Host 'Press Enter to close'\n",
+        repo_dir.display(),
+        dest_dir.display(),
+        prev_dir.display(),
+        cache_dir.display(),
+        game_dir_esc,
+        meta.repo,
+        meta.repo,
+    );
+    fs::write(&script_path, ps).map_err(|e| format!("Could not write update script: {e}"))?;
+    Command::new("cmd")
+        .args(["/C", "start", "Game Master Runner Updater", "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_path.to_string_lossy()])
+        .spawn()
+        .map_err(|e| format!("Failed to launch updater: {e}"))?;
+    Ok(())
+}
+
+/// Explicit opt-in fetcher for official NVIDIA DLSS/Streamline SDKs when `scripts/get-nvidia-sdks.ps1` exists.
+pub fn launch_fetch_nvidia_sdks(exe_path: &std::path::Path) -> Result<(), String> {
+    let dest_dir = exe_path.parent().ok_or("Invalid runner folder")?;
+    let slug = dest_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .ok_or("Invalid runner slug")?;
+    let repo_dir = runners_src_dir().join(slug);
+    let script = repo_dir.join("scripts").join("get-nvidia-sdks.ps1");
+    if !script.is_file() {
+        return Err(format!("No scripts/get-nvidia-sdks.ps1 found in {}", repo_dir.display()));
+    }
+    let ps = format!(
+        "$ErrorActionPreference = 'Stop'\n\
+         Write-Host 'Fetching official NVIDIA DLSS/Streamline SDKs...' -ForegroundColor Cyan\n\
+         & '{}' \n\
+         $bin = Join-Path '{}' 'nvidia-sdk\\Streamline\\bin\\x64'\n\
+         if (Test-Path $bin) {{\n\
+             Copy-Item (Join-Path $bin '*') -Destination '{}' -Force\n\
+             Write-Host 'Copied signed NVIDIA DLLs into runner folder!' -ForegroundColor Green\n\
+         }}\n\
+         Read-Host 'Press Enter to close'\n",
+        script.display(),
+        repo_dir.display(),
+        dest_dir.display(),
+    );
+    let wrapper = runners_src_dir().join(format!("fetch-dlss-{slug}.ps1"));
+    fs::write(&wrapper, ps).map_err(|e| format!("Could not write SDK fetcher script: {e}"))?;
+    Command::new("cmd")
+        .args(["/C", "start", "Fetch Official NVIDIA DLSS/FG SDKs", "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &wrapper.to_string_lossy()])
+        .spawn()
+        .map_err(|e| format!("Failed to launch NVIDIA SDK fetcher: {e}"))?;
     Ok(())
 }

@@ -344,14 +344,14 @@ unsafe fn handle_launch_or_stop(hwnd: HWND) {
             st.session = Some(sess);
             st.recent_logs = list_recent_logs(12);
             st.selected_log = 0;
-            st.set_toast("Launched Title");
+            st.set_toast("Launched Game Master 6");
             st.fps_history.clear();
             if st.settings.hud_overlay {
                 if let Some(ref mut hud) = st.hud {
                     hud.set_mode(st.settings.hud_mode);
                     hud.set_corner(st.settings.hud_corner);
                     let rname = st.settings.resolved_runner().file_name().and_then(|s| s.to_str()).unwrap_or("runner").to_string();
-                    hud.update(&format!("Title · {rname} · STARTING..."), rgb(0, 240, 255));
+                    hud.update(&format!("Game Master 6 · {rname} · STARTING..."), rgb(0, 240, 255));
                 }
             }
             if st.settings.zero_overhead {
@@ -968,6 +968,40 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
                 }
             }
         }
+        Target::UpdateRunner(idx) => {
+            if let Some(run) = st.runners.get(idx).cloned() {
+                match crate::builder::launch_update_runner(&run.path, &st.settings.game_dir) {
+                    Ok(()) => {
+                        st.set_toast(format!("Updating {} in external terminal...", run.name));
+                        redraw(hwnd);
+                    }
+                    Err(e) => {
+                        show_msg(hwnd, &e, "Update Runner Failed", MB_ICONERROR | MB_OK);
+                    }
+                }
+            }
+        }
+        Target::FetchNvidiaSdks(idx) => {
+            if let Some(run) = st.runners.get(idx).cloned() {
+                let ans = show_msg(
+                    hwnd,
+                    "Fetch Official NVIDIA DLSS & Frame Generation SDKs from github.com/NVIDIA-RTX/Streamline into this runner folder?",
+                    "Fetch Official NVIDIA DLSS/FG SDKs",
+                    MB_ICONQUESTION | MB_YESNO,
+                );
+                if ans == IDYES {
+                    match crate::builder::launch_fetch_nvidia_sdks(&run.path) {
+                        Ok(()) => {
+                            st.set_toast(format!("Fetching NVIDIA DLSS/FG SDKs for {}...", run.name));
+                            redraw(hwnd);
+                        }
+                        Err(e) => {
+                            show_msg(hwnd, &e, "SDK Fetch Failed", MB_ICONERROR | MB_OK);
+                        }
+                    }
+                }
+            }
+        }
         Target::DeleteRunner(idx) => {
             if let Some(run) = st.runners.get(idx).cloned() {
                 let ans = show_msg(
@@ -1384,7 +1418,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             st.log_scroll = 0;
             redraw(hwnd);
         }
-        Target::CopyLogSlice => {
+        Target::CopySessionTail => {
             let start = st.log_lines.len().saturating_sub(80);
             let snippet = st.log_lines[start..].join("\n");
             if copy_to_clipboard(hwnd, &snippet) {
@@ -1464,7 +1498,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         }
         Target::CycleAbExperiment => {
             let lbl = st.settings.cycle_ab_experiment();
-            st.save_settings(&format!("Live Baseline {lbl}"));
+            st.save_settings(&format!("Live BASELINE {lbl}"));
             redraw(hwnd);
         }
         Target::SafeBootRollback => {
@@ -1554,13 +1588,13 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             }
         }
         Target::CaptureScreenshot => {
-            let cap = crate::diagnostics::captures_dir().join(format!("GM6-{}.bmp", local_timestamp_filename()));
+            let cap = crate::diagnostics::captures_dir().join(format!("Session-{}.bmp", local_timestamp_filename()));
             match capture_screen_bmp(&cap) {
                 Ok(()) => {
                     st.set_toast(format!("Screenshot saved: captures\\{}", cap.file_name().unwrap_or_default().to_string_lossy()));
                     if let Some(ref mut hud) = st.hud {
                         if st.settings.hud_overlay && st.session.is_some() {
-                            hud.update("Title · SCREENSHOT SAVED (captures\\)", rgb(34, 211, 138));
+                            hud.update("Game Master 6 · SCREENSHOT SAVED (captures\\)", rgb(34, 211, 138));
                         }
                     }
                 }
@@ -1733,9 +1767,9 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
                 }
             }
             st.save_settings(if st.settings.kbm_crosshair {
-                "Standard center reticle + auto menu cursor (Esc/Tab/F8) enabled"
+                "Open-World center reticle + auto menu cursor (Esc/Tab/F8) enabled"
             } else {
-                "Standard center reticle disabled"
+                "Open-World center reticle disabled"
             });
             redraw(hwnd);
         }
@@ -2056,7 +2090,7 @@ unsafe fn on_timer(hwnd: HWND) {
         let poll_res = if let Some(ref mut sess) = st.session {
             if sess.kind == launcher::ProcessKind::Game && (!sess.window_branded || st.anim_tick % 10 == 0) {
                 let ico = Settings::app_dir().join("logo.ico");
-                if brand_runner_window(sess.child.id(), "Game Master 6 - Title", &ico, true) {
+                if brand_runner_window(sess.child.id(), "Game Master 6 Title", &ico, true) {
                     sess.window_branded = true;
                 }
                 if !sess.window_maximized {
@@ -2112,7 +2146,7 @@ unsafe fn on_timer(hwnd: HWND) {
                     let secs = sess.started_at.elapsed().as_secs();
                     let ram_str = if ws_gb > 0.01 { format!("{ws_gb:.1}G") } else { "-".into() };
                     hud.update(
-                        &format!("Title · {} {:02}:{:02} · RAM {ram_str}", sess.kind.label(), secs / 60, secs % 60),
+                        &format!("Game Master 6 · {} {:02}:{:02} · RAM {ram_str}", sess.kind.label(), secs / 60, secs % 60),
                         rgb(0, 240, 255),
                     );
                 }
@@ -2373,7 +2407,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 runner_benches: Vec::new(),
                 mods: saves::list_mods(8),
                 listening_keybind: None,
-                shader_census: ShaderCensus { translated: 0, total: 0, refused: 0, summary: "Baseline translator active. Click RUN CENSUS to scan the local shader archive.".into() },
+                shader_census: ShaderCensus { translated: 0, total: 0, refused: 0, summary: "BASELINE translator active. Click RUN CENSUS to scan the local shader archive.".into() },
                 census_rx: None,
                 last_crash: None,
                 dismissed_warning: None,
@@ -2758,7 +2792,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
 
 pub fn run() {
     std::panic::set_hook(Box::new(|info| {
-        let text = format!("Game Master v1.2 error:\n\n{info}");
+        let text = format!("Game Master v1.3 error:\n\n{info}");
         let dir = Settings::app_dir().join("logs");
         let _ = std::fs::create_dir_all(&dir);
         let _ = std::fs::write(dir.join("crash.txt"), &text);
@@ -2781,8 +2815,8 @@ pub fn run() {
             return;
         }
 
-        let class = wide("GameMasterViceV2Class");
-        let title = wide("Game Master 6 v1.2");
+        let class = wide("GameMaster6Class");
+        let title = wide("Game Master 6 v1.3");
         let hinst = GetModuleHandleW(std::ptr::null());
         let wc = WNDCLASSEXW {
             cb_size: std::mem::size_of::<WNDCLASSEXW>() as UINT,

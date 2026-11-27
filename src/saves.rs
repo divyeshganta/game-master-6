@@ -17,9 +17,28 @@ pub fn mods_dir() -> PathBuf {
     dir
 }
 
+/// Returns the single shared save vault directory (`%LOCALAPPDATA%\victory\data`)
+/// used across all Victory-family runners so saves persist across runner switches.
+pub fn shared_save_vault_dir() -> Option<PathBuf> {
+    default_victory_data_dir()
+}
+
+fn is_backup_entry(p: &Path) -> bool {
+    if p.is_dir() {
+        return true;
+    }
+    p.is_file()
+        && p.extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("zip"))
+        && p.file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with("saves-"))
+}
+
 pub fn count_backups() -> usize {
     fs::read_dir(backups_dir())
-        .map(|rd| rd.flatten().filter(|e| e.path().is_dir()).count())
+        .map(|rd| rd.flatten().filter(|e| is_backup_entry(&e.path())).count())
         .unwrap_or(0)
 }
 
@@ -29,21 +48,21 @@ pub fn count_mods() -> usize {
         .unwrap_or(0)
 }
 
-/// Returns the most recent save backup folder (name, path) if any exists.
+/// Returns the most recent save backup (ZIP or folder) if any exists.
 pub fn latest_backup() -> Option<(String, PathBuf)> {
-    let mut dirs: Vec<(std::time::SystemTime, String, PathBuf)> = Vec::new();
+    let mut items: Vec<(std::time::SystemTime, String, PathBuf)> = Vec::new();
     if let Ok(rd) = fs::read_dir(backups_dir()) {
         for e in rd.flatten() {
             let p = e.path();
-            if p.is_dir() {
+            if is_backup_entry(&p) {
                 let m = e.metadata().and_then(|md| md.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
                 let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
-                dirs.push((m, name, p));
+                items.push((m, name, p));
             }
         }
     }
-    dirs.sort_by(|a, b| b.0.cmp(&a.0));
-    dirs.into_iter().next().map(|(_, n, p)| (n, p))
+    items.sort_by(|a, b| b.0.cmp(&a.0));
+    items.into_iter().next().map(|(_, n, p)| (n, p))
 }
 
 /// Copies VIctory's `%LOCALAPPDATA%\victory\data` saves/profiles into `backups\saves-<timestamp>\`
@@ -114,19 +133,23 @@ pub fn restore_latest_backup() -> Result<(String, usize), String> {
 }
 
 fn prune_old_backups(keep: usize) {
-    let mut dirs: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
+    let mut items: Vec<(std::time::SystemTime, PathBuf)> = Vec::new();
     if let Ok(rd) = fs::read_dir(backups_dir()) {
         for e in rd.flatten() {
             let p = e.path();
-            if p.is_dir() {
+            if is_backup_entry(&p) {
                 let m = e.metadata().and_then(|md| md.modified()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
-                dirs.push((m, p));
+                items.push((m, p));
             }
         }
     }
-    dirs.sort_by(|a, b| b.0.cmp(&a.0));
-    for (_, old_dir) in dirs.into_iter().skip(keep) {
-        let _ = fs::remove_dir_all(old_dir);
+    items.sort_by(|a, b| b.0.cmp(&a.0));
+    for (_, old_path) in items.into_iter().skip(keep) {
+        if old_path.is_dir() {
+            let _ = fs::remove_dir_all(old_path);
+        } else {
+            let _ = fs::remove_file(old_path);
+        }
     }
 }
 
