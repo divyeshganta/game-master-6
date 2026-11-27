@@ -9,7 +9,7 @@ use crate::diagnostics::{logs_dir, strip_ansi, SystemInfo};
 use crate::runners::cache_dir_for;
 use crate::win32::{
     boost_process, kill_stray_runners, local_timestamp_filename, local_timestamp_human,
-    set_high_perf_gpu_preference, set_timer_1ms,
+    set_high_perf_gpu_preference, set_keep_awake, set_timer_1ms,
 };
 
 fn is_ztrx_runner(path: &Path) -> bool {
@@ -211,11 +211,36 @@ pub struct ActiveSession {
     pub parsed_progress: Option<u32>,
     pub phase: String,
     pub timer_active: bool,
+    pub keep_awake_active: bool,
     pub live_telemetry: Option<LiveFrameTelemetry>,
     pub window_branded: bool,
     pub window_maximized: bool,
     pub cache_dir: PathBuf,
     pub initial_cache_files: usize,
+}
+
+impl ActiveSession {
+    /// Releases all session-scoped Win32 hooks (1ms timer and KeepAwake execution state).
+    pub fn release_session_hooks(&mut self) {
+        if self.timer_active {
+            unsafe {
+                set_timer_1ms(false);
+            }
+            self.timer_active = false;
+        }
+        if self.keep_awake_active {
+            unsafe {
+                set_keep_awake(false);
+            }
+            self.keep_awake_active = false;
+        }
+    }
+}
+
+impl Drop for ActiveSession {
+    fn drop(&mut self) {
+        self.release_session_hooks();
+    }
 }
 
 pub struct PollUpdate {
@@ -446,6 +471,10 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
         timer_active = true;
     }
 
+    unsafe {
+        set_keep_awake(true);
+    }
+
     Ok(ActiveSession {
         kind: ProcessKind::Game,
         child,
@@ -455,6 +484,7 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
         parsed_progress: None,
         phase: "Initializing compatibility runner...".into(),
         timer_active,
+        keep_awake_active: true,
         live_telemetry: None,
         window_branded: false,
         window_maximized: false,
@@ -616,6 +646,7 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
             "Translating shaders & building pipeline cache...".into()
         },
         timer_active: false,
+        keep_awake_active: false,
         live_telemetry: None,
         window_branded: false,
         window_maximized: false,
@@ -670,12 +701,7 @@ pub fn poll(session: &mut ActiveSession) -> PollUpdate {
 
     let mut finished = None;
     if let Ok(Some(status)) = session.child.try_wait() {
-        if session.timer_active {
-            unsafe {
-                set_timer_1ms(false);
-            }
-            session.timer_active = false;
-        }
+        session.release_session_hooks();
         let code = status.code();
         let elapsed = session.started_at.elapsed().as_secs();
         let diagnosis = if code != Some(0) {
@@ -698,12 +724,7 @@ pub fn poll(session: &mut ActiveSession) -> PollUpdate {
 pub fn stop(session: &mut ActiveSession) {
     let _ = session.child.kill();
     let _ = session.child.wait();
-    if session.timer_active {
-        unsafe {
-            set_timer_1ms(false);
-        }
-        session.timer_active = false;
-    }
+    session.release_session_hooks();
 }
 
 /// Parses ztrx / VIctory live frame telemetry lines such as:
@@ -927,5 +948,17 @@ mod tests {
         assert_eq!(extract_progress("13100 shaders in the cache, 105 s"), Some(50));
         assert_eq!(extract_progress("26177 shaders in the cache, 5 do not translate, 210 s"), Some(100));
         assert_eq!(extract_progress("warm-up 5240 shaders so far, 40 s"), Some(20));
+    }
+
+    #[test]
+    fn gpu_preference_targets_only_runners() {
+        use crate::win32::is_allowed_gpu_pref_target;
+        assert!(is_allowed_gpu_pref_target(Path::new(r"C:\Games\runners\baseline\victory.exe")));
+        assert!(is_allowed_gpu_pref_target(Path::new(r"D:\Tools\victory-diag.exe")));
+        assert!(is_allowed_gpu_pref_target(Path::new(r"D:\Tools\GameRunner.exe")));
+        assert!(!is_allowed_gpu_pref_target(Path::new(r"C:\Windows\System32\cmd.exe")));
+        assert!(!is_allowed_gpu_pref_target(Path::new(r"C:\Windows\explorer.exe")));
+        assert!(!is_allowed_gpu_pref_target(Path::new(r"C:\Windows\Temp\victory.exe")));
+        assert!(!is_allowed_gpu_pref_target(Path::new(r"D:\Random\notepad.exe")));
     }
 }

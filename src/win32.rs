@@ -426,6 +426,7 @@ extern "system" {
         lp_existing_file_name: *const u16,
         lp_security_attributes: *mut c_void,
     ) -> BOOL;
+    pub fn SetThreadExecutionState(es_flags: DWORD) -> DWORD;
 }
 
 #[link(name = "advapi32")]
@@ -845,8 +846,26 @@ pub unsafe fn boost_process(pid: u32) {
     CloseHandle(h);
 }
 
+/// Returns true only for known compatibility runner executables outside Windows system folders.
+pub fn is_allowed_gpu_pref_target(exe_path: &Path) -> bool {
+    let lower_full = exe_path.to_string_lossy().to_ascii_lowercase();
+    if lower_full.contains("\\windows\\") {
+        return false;
+    }
+    matches!(
+        exe_path.file_name().and_then(|n| n.to_str()).map(|s| s.to_ascii_lowercase()).as_deref(),
+        Some("victory.exe" | "victory-diag.exe" | "gamerunner.exe")
+    )
+}
+
 /// Sets or clears Windows per-app High Performance GPU preference (GpuPreference=2;) for hybrid laptops.
 pub unsafe fn set_high_perf_gpu_preference(exe_path: &Path, enable: bool) -> Result<(), String> {
+    if enable && !is_allowed_gpu_pref_target(exe_path) {
+        return Err(format!(
+            "Refusing to set GpuPreference=2 on non-runner executable '{}'",
+            exe_path.display()
+        ));
+    }
     let subkey = wide(r"Software\Microsoft\DirectX\UserGpuPreferences");
     let mut hkey: HKEY = std::ptr::null_mut();
     let status = RegCreateKeyExW(
@@ -1096,6 +1115,20 @@ pub unsafe fn set_timer_1ms(enable: bool) {
         timeBeginPeriod(1);
     } else {
         timeEndPeriod(1);
+    }
+}
+
+pub const ES_SYSTEM_REQUIRED: DWORD = 0x00000001;
+pub const ES_DISPLAY_REQUIRED: DWORD = 0x00000002;
+pub const ES_CONTINUOUS: DWORD = 0x80000000;
+
+/// Keeps the display and system awake only while a game session is running, and resets to
+/// `ES_CONTINUOUS` when released.
+pub unsafe fn set_keep_awake(enable: bool) {
+    if enable {
+        SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+    } else {
+        SetThreadExecutionState(ES_CONTINUOUS);
     }
 }
 

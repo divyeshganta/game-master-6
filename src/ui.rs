@@ -1324,15 +1324,16 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             if killed > 0 {
                 actions.push(format!("Stopped {killed} stray runner process(es)"));
             }
-            // 3. Apply High-Performance RTX dGPU preference to ALL discovered runners
-            let mut gpu_set = 0usize;
-            for run in &st.runners {
-                if set_high_perf_gpu_preference(&run.path, true).is_ok() {
-                    gpu_set += 1;
+            // 3. Apply High-Performance dGPU preference strictly to the selected runner (if enabled)
+            if st.settings.prefer_dgpu {
+                let runner = st.settings.resolved_runner();
+                if set_high_perf_gpu_preference(&runner, true).is_ok() {
+                    let name = runner
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("victory.exe");
+                    actions.push(format!("Locked High-Perf dGPU on {name}"));
                 }
-            }
-            if gpu_set > 0 {
-                actions.push(format!("Locked High-Perf dGPU (RTX) on {gpu_set} runner(s)"));
             }
             // 5. Fix split exe / game_dir via 0-byte NTFS hardlink if needed
             if st.audit.exe_outside_game_dir {
