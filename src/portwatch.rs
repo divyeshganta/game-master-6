@@ -16,15 +16,16 @@ https://portwatch-vi.xyz/\n\
 https://doesleonidaboot.com/race\n";
 
 /// Direct GitHub fallback list used if ALL community tracker sites shut down (Nov 26, 2026 standings).
-const FALLBACK_REPOS: [(&str, &str, f64, &str, &str); 10] = [
-    ("CoolFox", "DoubleGhosty/cool_fox", 91.5, "Playable (NV)", "CoolFox VIctory/XCL build (DoubleGhosty mirror of codec-d/cool_fox)"),
+const FALLBACK_REPOS: [(&str, &str, f64, &str, &str); 11] = [
+    ("Belobug", "Belobug/VIctory-Belobug-AMD", 91.3, "Playable (AMD)", "Belobug's AMD-focused VIctory fork (91.3% — AMD)"),
+    ("VIctory-NVIDIA", "trustno1-coder/VIctory-NVIDIA", 90.0, "Playable (NV)", "NVIDIA DLSS Super Resolution + 2x-6x Frame Generation fork (90.0% — NVIDIA)"),
+    ("CoolFox", "DoubleGhosty/cool_fox", 85.0, "Playable (Baseline)", "DoubleGhosty mirror of cool_fox baseline"),
+    ("VIctory", "Marvisak/VIctory", 50.3, "Playable (Upstream)", "Upstream Rust Xbox Series compatibility runtime"),
     ("AvatarManz", "avatarmanz/VIctory-7900XTX", 83.1, "Playable (AMD)", "AvatarManz's 7900 XTX / AMD VIctory fork"),
-    ("Belobug", "Belobug/VIctory-Belobug-AMD", 79.0, "Playable (AMD)", "Belobug's AMD-focused VIctory fork"),
     ("DexNom", "DexNom/VIctory", 78.0, "Playable (AMD)", "DexNom's AMD VIctory fork with ray-traced lighting"),
     ("Kelvaroq", "fablinoo/kelvaroq", 68.8, "Playable (NV)", "Kelvaroq's public Rust runtime built on VIctory and victory-fork"),
     ("hyphennn", "fxceless/victory-fork", 59.8, "Playable (NV)", "VIctory fork with ray-traced lighting, meshlet & RTX fixes"),
     ("Uilian", "uiliannn/VItoriaBr", 59.6, "Playable (NV)", "Uilian's VItoriaBr built on victory-fork with NVIDIA work"),
-    ("VIctory", "Marvisak/VIctory", 50.3, "Playable (AMD)", "Upstream Rust Xbox Series compatibility runtime"),
     ("XCL", "xcl-dev/xcl", 35.0, "Main menu", "Wine-style Xbox Series layer with HLSL/DXIL shaders"),
     ("Xbox2Windows", "R0Y00/Xbox2Windows", 25.0, "First frame", "Static recompilation layer targeting Windows C++/DXIL"),
 ];

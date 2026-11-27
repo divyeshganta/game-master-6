@@ -1446,6 +1446,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         }
         Target::CycleDlssMode => {
             st.settings.cycle_dlss_mode();
+            st.settings.active_preset = "custom".into();
             let _ = crate::runners::sync_to_victory_settings(&st.settings, &st.settings.resolved_runner());
             let lbl = st.settings.dlss_mode_label().to_string();
             st.save_settings(&format!("Synced {lbl} -> victory-settings.txt"));
@@ -1458,8 +1459,9 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
                 _ => 2,
             };
             st.settings.cycle_framegen_x(max_x);
+            st.settings.active_preset = "custom".into();
             if st.settings.framegen_x > 0 && st.sys.vram_gb > 0.5 && st.sys.vram_gb <= 13.5 {
-                st.settings.texture_room_percent = "80".into();
+                st.settings.texture_room_percent = "75".into();
             }
             let _ = crate::runners::sync_to_victory_settings(&st.settings, &st.settings.resolved_runner());
             let lbl = st.settings.framegen_label();

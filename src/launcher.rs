@@ -312,7 +312,16 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
         None
     };
 
-    let perf_env_pairs = build_runner_env(s);
+    let runner_path = s.resolved_runner();
+    let kind = s.active_runner_kind();
+    if kind.is_victory_family() && crate::runners::is_streamline_runner(&runner_path) {
+        let _ = crate::runners::sync_to_victory_settings(s, &runner_path);
+    }
+    let perf_env_pairs = if kind.is_victory_family() {
+        resolve_victory_launch_env(s, &runner_path, kind, sys)
+    } else {
+        build_runner_env(s)
+    };
     let perf_env_parts: Vec<String> = perf_env_pairs
         .iter()
         .map(|(k, v)| format!("{k}={v}"))
@@ -324,7 +333,7 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
     };
 
     let header = format!(
-        "=== Game Master 6 v1.4 session ({})\n\
+        "=== Game Master 6 v{} session ({})\n\
          exe              : {}\n\
          game_dir         : {}\n\
          runner           : {}\n\
@@ -338,6 +347,7 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
          gpu_offload_env  : {}\n\
          timer_1ms        : {} | high_priority: {} | prefer_dgpu: {}\n\
          host_memory      : {:.1}/{:.1} GB RAM avail, {:.1}/{:.1} GB Commit avail, AVX2={}\n\n",
+        env!("CARGO_PKG_VERSION"),
         local_timestamp_human(),
         s.exe,
         s.game_dir,
@@ -365,8 +375,6 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
     let _ = file.flush();
     let initial_offset = file.metadata().map(|m| m.len()).unwrap_or(0);
 
-    let runner_path = s.resolved_runner();
-    let kind = s.active_runner_kind();
     let mut cmd = Command::new(&runner_path);
     let extra_args = split_args(&s.title_args);
 
@@ -988,6 +996,58 @@ pub fn resolve_victory_launch_env(
     kind: crate::runners::RunnerKind,
     sys: &SystemInfo,
 ) -> Vec<(String, String)> {
+    if crate::runners::is_streamline_runner(runner_path) {
+        let mut out: Vec<(String, String)> = Vec::new();
+        let mut set = |k: &str, v: String| {
+            if let Some(existing) = out.iter_mut().find(|(ek, _)| ek == k) {
+                existing.1 = v;
+            } else {
+                out.push((k.to_string(), v));
+            }
+        };
+
+        set("VICTORY_GAME_DIR", s.game_dir.clone());
+        if let Some(parent) = runner_path.parent() {
+            set("VICTORY_STREAMLINE_DIR", parent.to_string_lossy().into_owned());
+        }
+        set(
+            "VICTORY_CACHE_DIR",
+            crate::runners::default_victory_cache_dir().to_string_lossy().into_owned(),
+        );
+        if let Some(vault) = crate::saves::shared_save_vault_dir() {
+            set("VICTORY_DATA_DIR", vault.to_string_lossy().into_owned());
+        }
+        set("VICTORY_HOST_WAVE", "32".into());
+        let native_1440 = (s.console_model.eq_ignore_ascii_case("series-x") && (sys.vram_gb <= 16.5))
+            || s.display_mode.trim() == "2560x1440";
+        set("VICTORY_NATIVE_1440P", if native_1440 { "1" } else { "0" }.into());
+        let tex_room = if s.texture_room_percent.trim().is_empty() {
+            "75".to_string()
+        } else {
+            s.texture_room_percent.trim().to_string()
+        };
+        set("VICTORY_TEXTURE_ROOM_PERCENT", tex_room);
+        set("VICTORY_BVH_BUILDER", "0".into());
+        set("VICTORY_BORDERLESS", if s.borderless { "1" } else { "0" }.into());
+        set("VICTORY_LOG", s.effective_victory_log().to_string());
+
+        if let Some(prof) = crate::runners::load_runner_profile(runner_path) {
+            for (k, v) in prof.env {
+                set(&k, v);
+            }
+        }
+        if let Some(parent) = runner_path.parent() {
+            let vs_path = parent.join("victory-settings.txt");
+            if vs_path.is_file() {
+                set("VICTORY_MENU_FILE", vs_path.to_string_lossy().into_owned());
+                for (k, v) in crate::runners::parse_victory_settings(&vs_path) {
+                    set(&k, v);
+                }
+            }
+        }
+        return out;
+    }
+
     let mut out = build_runner_env(s);
     let mut set = |k: &str, v: String| {
         if let Some(existing) = out.iter_mut().find(|(ek, _)| ek == k) {
@@ -1013,25 +1073,9 @@ pub fn resolve_victory_launch_env(
         set("VICTORY_CACHE_DIR", cdir.to_string_lossy().into_owned());
     }
 
-    if crate::runners::has_dlss_dlls_beside(runner_path) {
-        if let Some(parent) = runner_path.parent() {
-            set("VICTORY_STREAMLINE_DIR", parent.to_string_lossy().into_owned());
-        }
-    }
-
     if let Some(prof) = crate::runners::load_runner_profile(runner_path) {
         for (k, v) in prof.env {
             set(&k, v);
-        }
-    }
-
-    if let Some(parent) = runner_path.parent() {
-        let vs_path = parent.join("victory-settings.txt");
-        if vs_path.is_file() {
-            set("VICTORY_MENU_FILE", vs_path.to_string_lossy().into_owned());
-            for (k, v) in crate::runners::parse_victory_settings(&vs_path) {
-                set(&k, v);
-            }
         }
     }
 
@@ -1057,16 +1101,30 @@ mod tests {
         .unwrap();
 
         let mut s = Settings::default();
+        s.console_model = "series-x".into();
         s.game_dir = r"D:\TestGame".into();
-        let sys = SystemInfo::default();
+        s.texture_room_percent = "75".into();
+        let mut sys = SystemInfo::default();
+        sys.vram_gb = 12.0;
         let env = resolve_victory_launch_env(&s, &exe, crate::runners::RunnerKind::Victory, &sys);
         let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
 
         assert_eq!(get("VICTORY_STREAMLINE_DIR"), Some(tmp.to_string_lossy().as_ref()));
+        assert_eq!(get("VICTORY_NATIVE_1440P"), Some("1"));
+        assert_eq!(get("VICTORY_TEXTURE_ROOM_PERCENT"), Some("75"));
+        assert_eq!(get("VICTORY_BVH_BUILDER"), Some("0"));
+        assert_eq!(get("VICTORY_HOST_WAVE"), Some("32"));
+        assert_eq!(get("VICTORY_LOG"), Some("warn"));
         assert_eq!(get("VICTORY_DLSS"), Some("1"));
         assert_eq!(get("VICTORY_DLSS_MODE"), Some("quality"));
         assert_eq!(get("VICTORY_FRAMEGEN"), Some("1"));
         assert_eq!(get("VICTORY_FRAMEGEN_X"), Some("3"));
+        // Must NOT inject cool_fox memory/relay flags into Streamline runners
+        assert_eq!(get("VICTORY_CARD_ROOM_FOR_TARGETS_MB"), None);
+        assert_eq!(get("VICTORY_CARD_BUFFERS_MB"), None);
+        assert_eq!(get("VICTORY_RELAY"), None);
+        assert_eq!(get("VICTORY_CARD_STEPS"), None);
+        assert_eq!(get("VICTORY_PORT_GUARD"), None);
         if let Some(vault) = crate::saves::shared_save_vault_dir() {
             assert_eq!(get("VICTORY_DATA_DIR"), Some(vault.to_string_lossy().as_ref()));
         }

@@ -715,6 +715,28 @@ pub fn has_dlss_dlls_beside(exe_path: &Path) -> bool {
     dir.join("sl.interposer.dll").is_file() || dir.join("nvngx_dlss.dll").is_file()
 }
 
+pub fn is_streamline_runner(exe_path: &Path) -> bool {
+    if has_dlss_dlls_beside(exe_path) {
+        return true;
+    }
+    let lower = exe_path.to_string_lossy().to_ascii_lowercase();
+    if lower.contains("victory-nvidia") || lower.contains("nvidia-streamline") {
+        return true;
+    }
+    if let Some(prof) = load_runner_profile(exe_path) {
+        let pn = prof.name.to_ascii_lowercase();
+        let pk = prof.kind.to_ascii_lowercase();
+        if pn.contains("victory-nvidia")
+            || pn.contains("nvidia-streamline")
+            || pk.contains("victory-nvidia")
+            || pk.contains("nvidia-streamline")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 pub fn parse_victory_settings(path: &Path) -> Vec<(String, String)> {
     let Ok(text) = fs::read_to_string(path) else {
         return Vec::new();
@@ -817,7 +839,7 @@ pub fn sync_to_victory_settings(s: &Settings, runner_path: &Path) -> Result<(), 
     let Some(parent) = runner_path.parent() else {
         return Err("Invalid runner path".into());
     };
-    if !has_dlss_dlls_beside(runner_path) && !parent.join("victory-settings.txt").is_file() {
+    if !is_streamline_runner(runner_path) && !parent.join("victory-settings.txt").is_file() {
         return Ok(());
     }
     let vs_path = parent.join("victory-settings.txt");
@@ -836,7 +858,9 @@ pub fn sync_to_victory_settings(s: &Settings, runner_path: &Path) -> Result<(), 
 
     set_kv("VICTORY_MENU_CONSOLE", s.console_model.clone());
     set_kv("VICTORY_MENU_RES", if s.display_mode == "1280x720" { "720".into() } else if s.display_mode == "1920x1080" { "1080".into() } else { "1440".into() });
-    set_kv("VICTORY_NATIVE_1440P", if s.display_mode == "2560x1440" { "1" } else { "0" }.into());
+    let native_1440 = s.display_mode == "2560x1440"
+        || (is_streamline_runner(runner_path) && s.console_model.eq_ignore_ascii_case("series-x"));
+    set_kv("VICTORY_NATIVE_1440P", if native_1440 { "1" } else { "0" }.into());
     if matches!(s.display_mode.as_str(), "1280x720" | "1664x936" | "1920x1080" | "2560x1440" | "3840x2160") {
         set_kv("VICTORY_OUTPUT", s.display_mode.clone());
     }

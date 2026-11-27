@@ -354,40 +354,59 @@ pub fn apply_adaptive_preset(s: &mut Settings, preset: PresetKind, sys: &SystemI
     s.display_1080p = s.display_mode == "1920x1080";
     s.active_preset = preset.id().into();
 
-    // If the active runner has NVIDIA DLSS/Streamline DLLs beside it, apply exact DLSS/FG preset tuning
-    // and sync two-way into victory-settings.txt.
+    // If the active runner is a Streamline/DLSS runner, apply exact DLSS/FG preset tuning
+    // (70/72/74% on 6-8 GB, 72/75/78% on 12 GB, 78/80/82% on 16 GB+) and sync to victory-settings.txt.
     let runner_path = s.resolved_runner();
-    if crate::runners::has_dlss_dlls_beside(&runner_path) && preset != PresetKind::Custom {
-        let is_rtx50 = sys.gpu_arch == crate::diagnostics::GpuArch::NvidiaBlackwell
-            || sys.gpu_arch == crate::diagnostics::GpuArch::Unknown;
-        let max_fg = if is_rtx50 { 3 } else { 2 };
+    if crate::runners::is_streamline_runner(&runner_path) && preset != PresetKind::Custom {
+        let fg_3_or_2 = match sys.gpu_arch {
+            crate::diagnostics::GpuArch::NvidiaBlackwell => 3,
+            crate::diagnostics::GpuArch::NvidiaAdaAmpere => 2,
+            crate::diagnostics::GpuArch::Unknown => 3,
+            _ => 0,
+        };
+        let fg_high = match sys.gpu_arch {
+            crate::diagnostics::GpuArch::NvidiaBlackwell
+            | crate::diagnostics::GpuArch::NvidiaAdaAmpere
+            | crate::diagnostics::GpuArch::Unknown => 2,
+            _ => 0,
+        };
+        let tex_room = match (tier, preset) {
+            (HardwareTier::Tight6 | HardwareTier::Tight8, PresetKind::Low) => "70",
+            (HardwareTier::Tight6 | HardwareTier::Tight8, PresetKind::Balanced) => "72",
+            (HardwareTier::Tight6 | HardwareTier::Tight8, PresetKind::High) => "74",
+            (HardwareTier::Mid12, PresetKind::Low) => "72",
+            (HardwareTier::Mid12, PresetKind::Balanced) => "75",
+            (HardwareTier::Mid12, PresetKind::High) => "78",
+            (_, PresetKind::Low) => "78",
+            (_, PresetKind::Balanced) => "80",
+            (_, PresetKind::High) => "82",
+            (_, PresetKind::Custom) => "75",
+        };
         match preset {
             PresetKind::Low => {
                 s.console_model = if tier <= HardwareTier::Tight8 { "series-s".into() } else { "series-x".into() };
                 s.display_mode = "1280x720".into();
-                s.dlss_mode = "balanced".into();
-                s.framegen_x = if tier <= HardwareTier::Tight8 { 2 } else { max_fg };
-                s.texture_room_percent = if tier == HardwareTier::Tight6 { "78".into() } else { "80".into() };
+                s.dlss_mode = "performance".into();
+                s.framegen_x = if tier <= HardwareTier::Tight8 && fg_3_or_2 > 2 { 2 } else { fg_3_or_2 };
                 s.frame_interval_us.clear();
             }
             PresetKind::Balanced => {
                 s.console_model = if tier <= HardwareTier::Tight8 { "series-s".into() } else { "series-x".into() };
                 s.display_mode = "1920x1080".into();
-                s.dlss_mode = "quality".into();
-                s.framegen_x = if tier <= HardwareTier::Tight8 { 2 } else { max_fg };
-                s.texture_room_percent = if tier == HardwareTier::Tight6 { "78".into() } else { "80".into() };
+                s.dlss_mode = "balanced".into();
+                s.framegen_x = if tier <= HardwareTier::Tight8 && fg_3_or_2 > 2 { 2 } else { fg_3_or_2 };
                 s.frame_interval_us = if tier == HardwareTier::Mid12 { "50000".into() } else { String::new() };
             }
             PresetKind::High => {
                 s.console_model = "series-x".into();
                 s.display_mode = "2560x1440".into();
                 s.dlss_mode = "quality".into();
-                s.framegen_x = max_fg;
-                s.texture_room_percent = if s.framegen_x > 0 { "80".into() } else { "90".into() };
+                s.framegen_x = fg_high;
                 s.frame_interval_us.clear();
             }
             PresetKind::Custom => {}
         }
+        s.texture_room_percent = tex_room.into();
         s.display_1080p = s.display_mode == "1920x1080";
         s.bvh_builder = false;
         s.log_level = "warn".into();
@@ -536,30 +555,34 @@ mod tests {
         sys.vram_gb = 12.0;
         sys.gpu_arch = crate::diagnostics::GpuArch::NvidiaBlackwell;
 
-        // 1. BALANCED preset -> writes 1080p, DLSS quality, 3x FG, 20 FPS base cap, 80% tex room, preserves unrelated keys
+        // 1. BALANCED preset -> writes 1080p, DLSS balanced, 3x FG, 20 FPS base cap, 75% tex room, preserves unrelated keys
         let _ = apply_adaptive_preset(&mut s, PresetKind::Balanced, &sys);
         let vs = std::fs::read_to_string(tmp.join("victory-settings.txt")).unwrap();
         assert!(vs.contains("VICTORY_OUTPUT=1920x1080"));
-        assert!(vs.contains("VICTORY_NATIVE_1440P=0"));
+        assert!(vs.contains("VICTORY_NATIVE_1440P=1"));
         assert!(vs.contains("VICTORY_DLSS=1"));
-        assert!(vs.contains("VICTORY_DLSS_MODE=quality"));
+        assert!(vs.contains("VICTORY_DLSS_MODE=balanced"));
         assert!(vs.contains("VICTORY_FRAMEGEN_X=3"));
         assert!(vs.contains("VICTORY_FRAME_INTERVAL_US=50000"));
-        assert!(vs.contains("VICTORY_TEXTURE_ROOM_PERCENT=80"));
+        assert!(vs.contains("VICTORY_TEXTURE_ROOM_PERCENT=75"));
         assert!(vs.contains("VICTORY_LIST_IDLE_TRIM_S=5"));
         assert!(vs.contains("VICTORY_SCRATCH_SPARE_MB=128"));
 
-        // 2. LOW preset -> writes 1280x720, DLSS balanced
+        // 2. LOW preset -> writes 1280x720, DLSS performance, 72% tex room
         let _ = apply_adaptive_preset(&mut s, PresetKind::Low, &sys);
         let vs_low = std::fs::read_to_string(tmp.join("victory-settings.txt")).unwrap();
         assert!(vs_low.contains("VICTORY_OUTPUT=1280x720"));
-        assert!(vs_low.contains("VICTORY_DLSS_MODE=balanced"));
+        assert!(vs_low.contains("VICTORY_DLSS_MODE=performance"));
+        assert!(vs_low.contains("VICTORY_TEXTURE_ROOM_PERCENT=72"));
 
-        // 3. HIGH preset -> writes 2560x1440, NATIVE_1440P=1
+        // 3. HIGH preset -> writes 2560x1440, NATIVE_1440P=1, DLSS quality, FG 2x, 78% tex room
         let _ = apply_adaptive_preset(&mut s, PresetKind::High, &sys);
         let vs_hi = std::fs::read_to_string(tmp.join("victory-settings.txt")).unwrap();
         assert!(vs_hi.contains("VICTORY_OUTPUT=2560x1440"));
         assert!(vs_hi.contains("VICTORY_NATIVE_1440P=1"));
+        assert!(vs_hi.contains("VICTORY_DLSS_MODE=quality"));
+        assert!(vs_hi.contains("VICTORY_FRAMEGEN_X=2"));
+        assert!(vs_hi.contains("VICTORY_TEXTURE_ROOM_PERCENT=78"));
 
         // 4. Two-way Read -> UI sync
         std::fs::write(
