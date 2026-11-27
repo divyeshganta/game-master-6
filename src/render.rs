@@ -6,39 +6,39 @@ use crate::portwatch::PortWatchSnapshot;
 use crate::runners::{runners_dir, DiscoveredRunner};
 use crate::monitor::ProcessStats;
 use crate::saves::ModItem;
-use crate::telemetry::{best_session, RunnerBenchSummary, SessionRecord};
+use crate::telemetry::{best_session, LogComparison, RunnerBenchSummary, SessionRecord};
 use crate::launcher::ActiveSession;
 use crate::win32::*;
 
-// Studio Obsidian-Vice Color System (RGB -> Win32 BGR COLORREF)
-pub const COL_BG_LEFT: DWORD = rgb(9, 10, 18);
-pub const COL_BG_RIGHT: DWORD = rgb(16, 14, 28);
-pub const COL_SIDEBAR: DWORD = rgb(12, 13, 22);
-pub const COL_PANEL: DWORD = rgb(18, 20, 32);
-pub const COL_PANEL_ALT: DWORD = rgb(23, 26, 42);
-pub const COL_PANEL_HOVER: DWORD = rgb(31, 35, 56);
-pub const COL_BORDER: DWORD = rgb(42, 46, 68);
-pub const COL_BORDER_HI: DWORD = rgb(84, 94, 136);
+// Pro 90/8/2 Dark Palette (RGB -> Win32 BGR COLORREF)
+pub const COL_BG_LEFT: DWORD = rgb(13, 15, 20);       // #0D0F14 canvas
+pub const COL_BG_RIGHT: DWORD = rgb(13, 15, 20);      // #0D0F14 canvas
+pub const COL_SIDEBAR: DWORD = rgb(16, 19, 26);       // #10131A sidebar
+pub const COL_PANEL: DWORD = rgb(20, 24, 33);         // #141821 cards
+pub const COL_PANEL_ALT: DWORD = rgb(24, 28, 39);     // #181C27 elevated rows
+pub const COL_PANEL_HOVER: DWORD = rgb(28, 33, 46);   // #1C212E hover
+pub const COL_BORDER: DWORD = rgb(35, 41, 56);        // #232938 subtle 1px border
+pub const COL_BORDER_HI: DWORD = rgb(54, 63, 86);     // #363F56 active hover border
 
-pub const COL_PINK: DWORD = rgb(255, 42, 133);
-pub const COL_ORANGE: DWORD = rgb(255, 140, 42);
-pub const COL_CYAN: DWORD = rgb(0, 240, 255);
-pub const COL_CYAN_BG: DWORD = rgb(14, 52, 64);
-pub const COL_EMERALD: DWORD = rgb(34, 211, 138);
-pub const COL_EMERALD_BG: DWORD = rgb(14, 54, 42);
-pub const COL_AMBER: DWORD = rgb(255, 190, 60);
-pub const COL_AMBER_BG: DWORD = rgb(62, 46, 16);
-pub const COL_CORAL: DWORD = rgb(255, 77, 109);
-pub const COL_CORAL_BG: DWORD = rgb(66, 20, 32);
+pub const COL_PINK: DWORD = rgb(244, 63, 122);        // Single brand accent (Launch CTA & active nav)
+pub const COL_ORANGE: DWORD = rgb(234, 138, 52);
+pub const COL_CYAN: DWORD = rgb(56, 189, 248);
+pub const COL_CYAN_BG: DWORD = rgb(19, 36, 52);
+pub const COL_EMERALD: DWORD = rgb(52, 211, 153);
+pub const COL_EMERALD_BG: DWORD = rgb(18, 42, 36);
+pub const COL_AMBER: DWORD = rgb(251, 191, 36);
+pub const COL_AMBER_BG: DWORD = rgb(46, 37, 18);
+pub const COL_CORAL: DWORD = rgb(248, 113, 113);
+pub const COL_CORAL_BG: DWORD = rgb(50, 22, 26);
 
 pub const COL_WHITE: DWORD = rgb(248, 250, 252);
-pub const COL_TEXT: DWORD = rgb(226, 224, 240);
-pub const COL_MUTED: DWORD = rgb(152, 144, 182);
-pub const COL_DIM: DWORD = rgb(108, 100, 138);
+pub const COL_TEXT: DWORD = rgb(226, 232, 240);
+pub const COL_MUTED: DWORD = rgb(148, 163, 184);
+pub const COL_DIM: DWORD = rgb(100, 116, 139);
 
-pub const COL_HERO_L: DWORD = rgb(46, 16, 72);
-pub const COL_HERO_R: DWORD = rgb(72, 30, 26);
-pub const COL_DOCK: DWORD = rgb(13, 14, 24);
+pub const COL_HERO_L: DWORD = rgb(20, 24, 33);
+pub const COL_HERO_R: DWORD = rgb(26, 30, 42);
+pub const COL_DOCK: DWORD = rgb(16, 19, 26);
 
 #[allow(dead_code)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -91,7 +91,6 @@ pub enum Target {
     BrowseExe,
     BrowseGameDir,
     BrowseRunner,
-    PastePath(usize),
     BrowseUpscalerDir,
     ClearUpscalerDir,
     SelectLog(usize),
@@ -166,8 +165,22 @@ pub enum Target {
     CycleQueue2Landing,
     CycleTextureRoom,
     ToggleAdvSection(usize),
+    PastePath(usize),
+    BenchmarkRun,
+    ToggleCompareLogs,
     DismissCrash,
     DismissWarning,
+    PinBaseline,
+    RollbackBaseline,
+    PromoteBaseline,
+    CycleAdvFilter,
+    ApplyDoctorFix,
+    CopyBenchmarkMd,
+    KillRamHog(usize),
+    BuildCustomRepo,
+    ExportPresetJson,
+    ImportPresetJson,
+    OpenReleasesPage,
 }
 
 pub const SHADER_PRESETS: [&str; 6] = ["AUTO", "64", "128", "256", "512", "1024"];
@@ -185,7 +198,7 @@ pub fn tuning_max_scroll(client_h: c_int) -> usize {
 pub fn runner_badge(settings: &Settings) -> &'static str {
     let r = settings.resolved_runner().to_string_lossy().to_ascii_lowercase();
     if r.contains("baseline") {
-        "BASELINE"
+        "Baseline"
     } else if r.contains("ztrx") {
         "ZTRX"
     } else if r.contains("diag") {
@@ -414,6 +427,15 @@ pub struct RenderContext<'a> {
     pub dismissed_warning: Option<&'a str>,
     pub adv_collapsed: [bool; 5],
     pub system_tip: &'a (bool, String),
+    pub log_comparison: Option<&'a LogComparison>,
+    pub show_log_compare: bool,
+    pub free_ram_history: &'a [u32],
+    pub avail_commit_history: &'a [u32],
+    pub vram_headroom_history: &'a [u32],
+    pub adv_filter: &'a str,
+    pub auto_doctor: Option<&'a crate::telemetry::AutoDoctorReport>,
+    pub cache_hash_mismatch: bool,
+    pub beats_baseline: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -760,7 +782,7 @@ pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(R
     );
     draw_text(
         hdc,
-        "v1.0",
+        "v1.2",
         RECT::new(20, h - 40, 104, h - 20),
         ctx.fonts.small_bold,
         COL_DIM,
@@ -792,7 +814,7 @@ pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(R
     } else {
         "CACHE NOT PREPARED".into()
     };
-    let header_sub = format!("v1.0 · {phase_txt}");
+    let header_sub = format!("v1.2 · {phase_txt}");
     draw_text(
         hdc,
         &header_sub,
@@ -916,7 +938,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     let tx = hero_r.left + 28;
     let tw = (hero_r.width() - 260).max(280);
     let gpu_eyebrow = if ctx.sys.gpu_name.is_empty() {
-        format!("DETECTING GPU  ·  {}  ·  v1.0", ctx.settings.active_runner_kind().badge())
+        format!("DETECTING GPU  ·  {}  ·  v1.2", ctx.settings.active_runner_kind().badge())
     } else if ctx.sys.vram_gb > 0.5 {
         format!(
             "{}  ·  {:.0} GB VRAM  ·  {}",
@@ -938,7 +960,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     // Generous rects (70px) give Oswald's descenders room so neither line clips.
     draw_text(
         hdc,
-        "GAME",
+        "GAME MASTER",
         RECT::new(tx + 2, hero_r.top + 38, tx + tw + 4, hero_r.top + 108),
         ctx.fonts.hero,
         rgb(16, 6, 28),
@@ -946,7 +968,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     );
     draw_text(
         hdc,
-        "GAME",
+        "GAME MASTER",
         RECT::new(tx - 1, hero_r.top + 36, tx + tw, hero_r.top + 106),
         ctx.fonts.hero,
         COL_WHITE,
@@ -954,7 +976,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     );
     draw_text(
         hdc,
-        "MASTER 6",
+        "6.0",
         RECT::new(tx + 2, hero_r.top + 98, tx + tw + 4, hero_r.top + 168),
         ctx.fonts.hero,
         rgb(16, 6, 28),
@@ -962,7 +984,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     );
     draw_text(
         hdc,
-        "MASTER 6",
+        "6.0",
         RECT::new(tx - 1, hero_r.top + 96, tx + tw, hero_r.top + 166),
         ctx.fonts.hero,
         COL_PINK,
@@ -1127,21 +1149,15 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         draw_text(hdc, &lbl, RECT::new(prep_r.left + 12, prep_r.top + 8, prep_r.right - 12, prep_r.bottom - 22), ctx.fonts.body_bold, COL_AMBER, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     } else {
         let prep_lbl = if cache_ready {
-            let short_cache = ctx
-                .audit
-                .shader_cache_label
-                .split(" (")
-                .next()
-                .unwrap_or(&ctx.audit.shader_cache_label);
-            format!("CACHE READY · {short_cache}")
+            format!("✓  CACHE READY ({})", ctx.audit.shader_cache_label)
         } else {
             "PREPARE CACHE".into()
         };
         draw_text(
             hdc,
             &prep_lbl,
-            RECT::new(prep_r.left + 10, prep_r.top, prep_r.right - 10, prep_r.bottom),
-            ctx.fonts.heading,
+            prep_r,
+            ctx.fonts.title,
             if cache_ready { COL_EMERALD } else { COL_CYAN },
             DT_CENTER | DT_VCENTER | DT_SINGLELINE,
         );
@@ -1162,7 +1178,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         let secs = sess.started_at.elapsed().as_secs();
         format!("■  RUNNING ({:02}:{:02}) — STOP", secs / 60, secs % 60)
     } else {
-        "▶  LAUNCH TITLE".into()
+        "▶  LAUNCH Title".into()
     };
     let play_sub = format!(
         "{}  ·  {}  ·  {}  ·  {}",
@@ -1175,14 +1191,14 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     draw_text(hdc, &play_sub, RECT::new(play_r.left + 14, play_r.top + 50, play_r.right - 14, play_r.bottom - 10), ctx.fonts.small_bold, rgb(255, 232, 240), DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     hits.push((play_r, Target::LaunchOrStop));
 
-    // ── Smart Crash Summary Card OR First-Run Onboarding Card ───────────────
+    // ── Smart Crash Summary / Auto-Doctor / 3-Step Setup / System Tip ─────────
     let mut card_bottom = actions_y + actions_h;
     if let Some((code_tag, diag, _log_path)) = ctx.last_crash {
         let cy = actions_y + actions_h + 14;
         let ch = (r.bottom - cy - 34).clamp(84, 112);
         if ch >= 84 {
             let cr = RECT::new(r.left, cy, r.right, cy + ch);
-            rounded_rect(hdc, cr, COL_CORAL_BG, COL_CORAL, 14);
+            rounded_rect(hdc, cr, COL_CORAL_BG, COL_BORDER, 12);
             let title = format!("CRASH SUMMARY · EXIT {code_tag}");
             draw_text(hdc, &title, RECT::new(cr.left + 16, cr.top + 10, cr.right - 340, cr.top + 30), ctx.fonts.small_bold, COL_CORAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             draw_text(hdc, diag, RECT::new(cr.left + 16, cr.top + 34, cr.right - 340, cr.bottom - 10), ctx.fonts.small, COL_TEXT, DT_LEFT | DT_WORDBREAK);
@@ -1199,21 +1215,65 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
             draw_button(hdc, dis_r, "DISMISS", ctx.fonts.small_bold, ctx.hover == Target::DismissCrash, COL_MUTED, Target::DismissCrash, hits);
             card_bottom = cr.bottom;
         }
-    } else if ctx.settings.game_dir.trim().is_empty()
-        || !std::path::Path::new(&ctx.settings.game_dir).is_dir()
-        || ctx.settings.exe.trim().is_empty()
+    } else if ctx.settings.exe.trim().is_empty()
         || !std::path::Path::new(&ctx.settings.exe).is_file()
+        || !ctx.settings.resolved_runner().is_file()
     {
         let cy = actions_y + actions_h + 14;
-        let ch = (r.bottom - cy - 34).clamp(72, 92);
-        if ch >= 72 {
+        let ch = (r.bottom - cy - 34).clamp(84, 108);
+        if ch >= 84 {
             let cr = RECT::new(r.left, cy, r.right, cy + ch);
-            rounded_rect(hdc, cr, COL_AMBER_BG, COL_AMBER, 14);
-            draw_text(hdc, "FIRST-RUN SETUP · SELECT YOUR GAME FOLDER", RECT::new(cr.left + 16, cr.top + 12, cr.right - 240, cr.top + 34), ctx.fonts.small_bold, COL_AMBER, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-            draw_text(hdc, "Game Master inspects your Xbox Series folder read-only and never modifies game files.", RECT::new(cr.left + 16, cr.top + 38, cr.right - 240, cr.bottom - 10), ctx.fonts.small, COL_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-            let br_r = RECT::new(cr.right - 224, cr.top + 18, cr.right - 16, cr.bottom - 18);
-            draw_button(hdc, br_r, "BROWSE GAME FOLDER...", ctx.fonts.small_bold, ctx.hover == Target::BrowseGameDir, COL_AMBER, Target::BrowseGameDir, hits);
+            rounded_rect(hdc, cr, COL_PANEL, COL_BORDER, 12);
+            draw_text(hdc, "3-STEP FIRST-RUN SETUP · DRAG & DROP .EXE OR RUNNER FOLDER ANYWHERE", RECT::new(cr.left + 16, cr.top + 10, cr.right - 360, cr.top + 32), ctx.fonts.small_bold, COL_AMBER, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            let step1 = if std::path::Path::new(&ctx.settings.exe).is_file() { "1. Game Exe: OK" } else { "1. Drop/Browse Game Exe" };
+            let step2 = if ctx.settings.resolved_runner().is_file() { "2. Runner: OK" } else { "2. Drop/Browse Runner" };
+            let step3 = if ctx.audit.shader_cache_ready { "3. Cache: Ready" } else { "3. Prepare Cache & Play" };
+            draw_text(hdc, &format!("{step1}   ·   {step2}   ·   {step3}"), RECT::new(cr.left + 16, cr.top + 38, cr.right - 360, cr.bottom - 10), ctx.fonts.small, COL_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            let br_r = RECT::new(cr.right - 168, cr.top + 20, cr.right - 14, cr.bottom - 20);
+            draw_button(hdc, br_r, "BROWSE EXE...", ctx.fonts.small_bold, ctx.hover == Target::BrowseExe, COL_AMBER, Target::BrowseExe, hits);
+            let run_b = RECT::new(br_r.left - 168, cr.top + 20, br_r.left - 8, cr.bottom - 20);
+            draw_button(hdc, run_b, "BROWSE RUNNER...", ctx.fonts.small_bold, ctx.hover == Target::BrowseRunner, COL_CYAN, Target::BrowseRunner, hits);
             card_bottom = cr.bottom;
+        }
+    } else if let Some(doc) = ctx.auto_doctor {
+        let cy = actions_y + actions_h + 14;
+        let ch = (r.bottom - cy - 34).clamp(84, 108);
+        if ch >= 84 {
+            let cr = RECT::new(r.left, cy, r.right, cy + ch);
+            rounded_rect(hdc, cr, COL_PANEL, COL_BORDER, 12);
+            let hdr = format!(
+                "AUTO-DOCTOR · {} · {:.2} FPS AVG ({:.1}–{:.1}) · GPU {:.1} MS",
+                doc.diagnosis.to_ascii_uppercase(),
+                doc.avg_fps,
+                doc.min_fps,
+                doc.max_fps,
+                doc.gpu_ms
+            );
+            draw_text(hdc, &hdr, RECT::new(cr.left + 16, cr.top + 10, cr.right - 360, cr.top + 32), ctx.fonts.small_bold, if doc.recommended_fix.is_some() { COL_AMBER } else { COL_EMERALD }, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            draw_text(hdc, &doc.advice, RECT::new(cr.left + 16, cr.top + 38, cr.right - 360, cr.bottom - 10), ctx.fonts.small, COL_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            let cp_r = RECT::new(cr.right - 118, cr.top + 20, cr.right - 14, cr.bottom - 20);
+            draw_button(hdc, cp_r, "COPY MD", ctx.fonts.small_bold, ctx.hover == Target::CopyBenchmarkMd, COL_CYAN, Target::CopyBenchmarkMd, hits);
+            let mut next_right = cp_r.left - 8;
+            if let Some(fix) = doc.recommended_fix {
+                let fx_r = RECT::new(next_right - 196, cr.top + 20, next_right, cr.bottom - 20);
+                draw_button(hdc, fx_r, fix.label(), ctx.fonts.small_bold, ctx.hover == Target::ApplyDoctorFix, COL_AMBER, Target::ApplyDoctorFix, hits);
+                next_right = fx_r.left - 8;
+            }
+            if ctx.beats_baseline {
+                let pr_r = RECT::new(next_right - 166, cr.top + 20, next_right, cr.bottom - 20);
+                draw_button(hdc, pr_r, "PROMOTE BASELINE (+5%)", ctx.fonts.small_bold, ctx.hover == Target::PromoteBaseline, COL_EMERALD, Target::PromoteBaseline, hits);
+            }
+            card_bottom = cr.bottom;
+        }
+    } else if ctx.cache_hash_mismatch {
+        let wy = actions_y + actions_h + 14;
+        if wy + 44 <= r.bottom - 30 {
+            let wr = RECT::new(r.left, wy, r.right, wy + 42);
+            rounded_rect(hdc, wr, COL_AMBER_BG, COL_BORDER, 10);
+            let prep_b = RECT::new(wr.right - 168, wr.top + 7, wr.right - 10, wr.bottom - 7);
+            draw_button(hdc, prep_b, "PREPARE CACHE", ctx.fonts.small_bold, ctx.hover == Target::Prepare, COL_AMBER, Target::Prepare, hits);
+            draw_text(hdc, "RUNNER BINARY CHANGED (SHA-256 MISMATCH) — RUN PREPARE CACHE BEFORE LAUNCHING", RECT::new(wr.left + 16, wr.top, prep_b.left - 12, wr.bottom), ctx.fonts.small_bold, COL_AMBER, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            card_bottom = wr.bottom;
         }
     } else if Some(ctx.system_tip.1.as_str()) != ctx.dismissed_warning && !ctx.system_tip.1.is_empty() {
         let (is_warn, ref tip_msg) = *ctx.system_tip;
@@ -1253,20 +1313,22 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         let hud_lbl = format!("HUD: {}", ctx.settings.hud_mode_label());
         draw_button(hdc, hud_r, &hud_lbl, ctx.fonts.small_bold, ctx.hover == Target::CycleHudMode, COL_CYAN, Target::CycleHudMode, hits);
 
-        let km_r = RECT::new(hud_r.left - 176, note_y - 2, hud_r.left - 8, note_y + 24);
+        let km_r = RECT::new(hud_r.left - 156, note_y - 2, hud_r.left - 8, note_y + 24);
         let km_lbl = format!("KEYS: {}", crate::keymap::KeymapPreset::from_id(&ctx.settings.keymap_preset).label());
-        draw_button(hdc, km_r, &km_lbl, ctx.fonts.small_bold, ctx.hover == Target::CycleKeymapPreset, COL_PINK, Target::CycleKeymapPreset, hits);
+        draw_button(hdc, km_r, &km_lbl, ctx.fonts.small_bold, ctx.hover == Target::CycleKeymapPreset, COL_MUTED, Target::CycleKeymapPreset, hits);
 
-        let foot = format!(
-            "{} · RAM {}% · COMMIT {}%",
-            ctx.playtime_label,
-            ctx.ram_history.last().copied().unwrap_or(0),
-            ctx.commit_history.last().copied().unwrap_or(0)
-        );
+        let pin_r = RECT::new(km_r.left - 132, note_y - 2, km_r.left - 8, note_y + 24);
+        let pin_lbl = if ctx.settings.pinned_baseline_locked { "BASELINE LOCKED" } else { "PIN BASELINE" };
+        draw_button(hdc, pin_r, pin_lbl, ctx.fonts.small_bold, ctx.hover == Target::PinBaseline, if ctx.settings.pinned_baseline_locked { COL_EMERALD } else { COL_CYAN }, Target::PinBaseline, hits);
+
+        let rb_r = RECT::new(pin_r.left - 110, note_y - 2, pin_r.left - 8, note_y + 24);
+        draw_button(hdc, rb_r, "ROLLBACK", ctx.fonts.small_bold, ctx.hover == Target::RollbackBaseline, COL_AMBER, Target::RollbackBaseline, hits);
+
+        let foot = format!("{} · {}", ctx.playtime_label, ctx.sys.gpu_arch.label());
         draw_text(
             hdc,
             &foot,
-            RECT::new(r.left + 4, note_y, km_r.left - 10, note_y + 22),
+            RECT::new(r.left + 4, note_y, rb_r.left - 10, note_y + 22),
             ctx.fonts.small,
             COL_MUTED,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE,
@@ -1372,7 +1434,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
                 rec.runner, rec.console, rec.duration_secs, rec.peak_fps
             )
         } else {
-            "No completed session recorded yet — launch title to benchmark.".into()
+            "No completed session recorded yet — launch Title to benchmark.".into()
         };
         draw_text(
             hdc,
@@ -1452,6 +1514,8 @@ unsafe fn draw_runners(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(R
     draw_button(hdc, b_pw, "TRACKERS.TXT", ctx.fonts.small_bold, ctx.hover == Target::OpenTrackersFile, COL_CYAN, Target::OpenTrackersFile, hits);
     let b_dir = RECT::new(b_pw.left - 124, r.top + 20, b_pw.left - 10, r.top + 54);
     draw_button(hdc, b_dir, "RUNNERS DIR", ctx.fonts.small_bold, ctx.hover == Target::OpenRunnersDir, COL_TEXT, Target::OpenRunnersDir, hits);
+    let b_url = RECT::new(b_dir.left - 144, r.top + 20, b_dir.left - 10, r.top + 54);
+    draw_button(hdc, b_url, "BUILD FROM URL...", ctx.fonts.small_bold, ctx.hover == Target::BuildCustomRepo, COL_EMERALD, Target::BuildCustomRepo, hits);
 
     draw_line(hdc, r.left + 24, r.top + 74, r.right - 24, r.top + 74, COL_BORDER, 1);
 
@@ -1567,7 +1631,7 @@ Click SYNC LIVE to retry or PORTWATCH VI to open in browser."),
         let msg = if ctx.portwatch_syncing {
             "Fetching live standings from https://portwatch-vi.xyz/tracker.json ..."
         } else {
-            "Click SYNC LIVE to scan the latest PC compatibility runners, forks, and builds from portwatch-vi.xyz."
+            "Click SYNC LIVE to scan the latest Title PC ports, forks, and ray-tracing builds from portwatch-vi.xyz."
         };
         draw_text(hdc, msg, RECT::new(right_r.left + 16, right_r.top + 48, right_r.right - 16, right_r.top + 120), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_WORDBREAK);
         return;
@@ -1749,7 +1813,7 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
     rounded_rect(hdc, r, COL_PANEL, COL_BORDER, 16);
     draw_text(hdc, "ADVANCED / ENGINEERING", RECT::new(r.left + 24, r.top + 16, r.left + 380, r.top + 46), ctx.fonts.heading, COL_WHITE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    // Top-right header toolbar: RESET DEFAULTS | A/B TEST | HIGH | BALANCED | LOW
+    // Top-right header toolbar: V11 RESET | A/B TEST | HIGH | BALANCED | LOW
     let p3 = RECT::new(r.right - 104, r.top + 20, r.right - 20, r.top + 52);
     draw_button(hdc, p3, "LOW", ctx.fonts.small_bold, ctx.hover == Target::ApplyPreset(2), COL_AMBER, Target::ApplyPreset(2), hits);
     let p2 = RECT::new(p3.left - 118, r.top + 20, p3.left - 8, r.top + 52);
@@ -1760,14 +1824,17 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
     let ab_exp = crate::ab_bench::AbExperiment::from_id(&ctx.settings.ab_experiment);
     let ab_col = if ab_exp == crate::ab_bench::AbExperiment::Off { COL_MUTED } else { COL_EMERALD };
     draw_button(hdc, ab_r, ab_exp.label(), ctx.fonts.small_bold, ctx.hover == Target::CycleAbExperiment, ab_col, Target::CycleAbExperiment, hits);
-    let rst_r = RECT::new(ab_r.left - 142, r.top + 20, ab_r.left - 8, r.top + 52);
-    draw_button(hdc, rst_r, "RESET DEFAULTS", ctx.fonts.small_bold, ctx.hover == Target::ResetV11Perf, COL_CORAL, Target::ResetV11Perf, hits);
+    let rst_r = RECT::new(ab_r.left - 112, r.top + 20, ab_r.left - 8, r.top + 52);
+    draw_button(hdc, rst_r, "V11 RESET", ctx.fonts.small_bold, ctx.hover == Target::ResetV11Perf, COL_CORAL, Target::ResetV11Perf, hits);
+    let flt_r = RECT::new(rst_r.left - 116, r.top + 20, rst_r.left - 8, r.top + 52);
+    let flt_lbl = format!("FILTER: {}", ctx.adv_filter);
+    draw_button(hdc, flt_r, &flt_lbl, ctx.fonts.small_bold, ctx.hover == Target::CycleAdvFilter, COL_CYAN, Target::CycleAdvFilter, hits);
 
     let active_env_count = crate::launcher::build_runner_env(ctx.settings).len();
     let tuning_sub = format!(
-        "{active_env_count} verified runner env flags active  ·  Click any section header to collapse/expand  ·  Scroll for more"
+        "{active_env_count} verified env flags active  ·  Click any section header to collapse/expand  ·  Scroll for more"
     );
-    draw_text(hdc, &tuning_sub, RECT::new(r.left + 24, r.top + 46, rst_r.left - 12, r.top + 66), ctx.fonts.small, COL_CYAN, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(hdc, &tuning_sub, RECT::new(r.left + 24, r.top + 46, flt_r.left - 12, r.top + 66), ctx.fonts.small, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     draw_line(hdc, r.left + 24, r.top + 74, r.right - 24, r.top + 74, COL_BORDER, 1);
 
     let clip_top = r.top + 78;
@@ -1818,7 +1885,7 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
         hits.push((hr, Target::ToggleAdvSection(sec_idx)));
     };
 
-    // Helper: uniform card with standardized border colors (accent=on, muted=off, amber=exp) and 84px pill
+    // Helper: clean flat settings row with 1px hairline border (no competing neon outlines)
     let draw_adv_card = |hdc: HDC,
                          cr: RECT,
                          title: &str,
@@ -1829,21 +1896,15 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
                          target: Target,
                          hits: &mut Vec<(RECT, Target)>| {
         let hov = ctx.hover == target;
-        let bg = if on {
-            if is_exp { COL_AMBER_BG } else { COL_CYAN_BG }
-        } else if hov {
+        let bg = if hov {
             COL_PANEL_HOVER
-        } else {
+        } else if on {
             COL_PANEL_ALT
-        };
-        let bd = if on {
-            if is_exp { COL_AMBER } else { COL_CYAN }
-        } else if hov {
-            COL_BORDER_HI
         } else {
-            COL_BORDER
+            COL_PANEL
         };
-        rounded_rect(hdc, cr, bg, bd, 11);
+        let bd = if hov { COL_BORDER_HI } else { COL_BORDER };
+        rounded_rect(hdc, cr, bg, bd, 8);
 
         let pill_w = 92;
         let pill = RECT::new(cr.right - pill_w - 8, cr.top + 8, cr.right - 8, cr.top + 28);
@@ -1990,7 +2051,7 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
         ("AMBIENT SHADE", "GI shade fill + crease AO", ctx.settings.ambient_fill, false, if ctx.settings.ambient_fill { "ON" } else { "OFF" }, Target::ToggleAmbientFill),
         ("BVH BUILDER", "Ray-trace BVH acceleration", ctx.settings.bvh_builder, true, if ctx.settings.bvh_builder { "ON" } else { "OFF" }, Target::ToggleBvhBuilder),
         ("FLOAT HUD", hud_sub, ctx.settings.hud_overlay, false, if ctx.settings.hud_overlay { "ON" } else { "OFF" }, Target::ToggleHudOverlay),
-        ("CENTER RETICLE", "Center dot + auto menu cursor", ctx.settings.kbm_crosshair, false, if ctx.settings.kbm_crosshair { "ON" } else { "OFF" }, Target::ToggleKbmCrosshair),
+        ("Standard RETICLE", "Center dot + auto menu cursor", ctx.settings.kbm_crosshair, false, if ctx.settings.kbm_crosshair { "ON" } else { "OFF" }, Target::ToggleKbmCrosshair),
     ];
     let s4_on = s4_items.iter().filter(|x| x.2).count();
     draw_sec_hdr(hdc, 3, "SECTION 4 · DISPLAY, VISUALS & HUD", s4_on, s4_items.len(), y, &mut card_hits);
@@ -2082,17 +2143,20 @@ unsafe fn draw_logs(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     draw_text(hdc, "LIVE LOGS", RECT::new(r.left + 24, r.top + 18, (r.right - 760).max(r.left + 140), r.top + 50), ctx.fonts.heading, COL_WHITE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     draw_text(hdc, "Scroll with mouse wheel. Select a session log on the left or export a local system report.", RECT::new(r.left + 24, r.top + 50, r.left + 580, r.top + 70), ctx.fonts.small, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
-    let b3 = RECT::new(r.right - 178, r.top + 22, r.right - 20, r.top + 56);
+    let b3 = RECT::new(r.right - 156, r.top + 22, r.right - 20, r.top + 56);
     draw_button(hdc, b3, "EXPORT REPORT", ctx.fonts.small_bold, ctx.hover == Target::ExportReport, COL_ORANGE, Target::ExportReport, hits);
-    let b2 = RECT::new(b3.left - 146, r.top + 22, b3.left - 10, r.top + 56);
+    let b2 = RECT::new(b3.left - 134, r.top + 22, b3.left - 8, r.top + 56);
     draw_button(hdc, b2, "OPEN LOGS DIR", ctx.fonts.small_bold, ctx.hover == Target::OpenLogsDir, COL_CYAN, Target::OpenLogsDir, hits);
-    let b1 = RECT::new(b2.left - 122, r.top + 22, b2.left - 8, r.top + 56);
+    let b1 = RECT::new(b2.left - 108, r.top + 22, b2.left - 8, r.top + 56);
     draw_button(hdc, b1, "OPEN LOG", ctx.fonts.small_bold, ctx.hover == Target::OpenCurrentLog, COL_TEXT, Target::OpenCurrentLog, hits);
-    let b_ai = RECT::new(b1.left - 140, r.top + 22, b1.left - 8, r.top + 56);
+    let b_ai = RECT::new(b1.left - 134, r.top + 22, b1.left - 8, r.top + 56);
     draw_button(hdc, b_ai, "AI DEBUG BUNDLE", ctx.fonts.small_bold, ctx.hover == Target::ExportAiBundle, COL_PINK, Target::ExportAiBundle, hits);
-    let b_csv = RECT::new(b_ai.left - 116, r.top + 22, b_ai.left - 8, r.top + 56);
-    draw_button(hdc, b_csv, "SESSIONS CSV", ctx.fonts.small_bold, ctx.hover == Target::OpenSessionsCsv, COL_EMERALD, Target::OpenSessionsCsv, hits);
-    let b_cln = RECT::new(b_csv.left - 108, r.top + 22, b_csv.left - 8, r.top + 56);
+    let b_cmp = RECT::new(b_ai.left - 144, r.top + 22, b_ai.left - 8, r.top + 56);
+    let cmp_col = if ctx.show_log_compare { COL_EMERALD } else { COL_CYAN };
+    draw_button(hdc, b_cmp, "COMPARE LAST 2", ctx.fonts.small_bold, ctx.hover == Target::ToggleCompareLogs, cmp_col, Target::ToggleCompareLogs, hits);
+    let b_bm = RECT::new(b_cmp.left - 144, r.top + 22, b_cmp.left - 8, r.top + 56);
+    draw_button(hdc, b_bm, "BENCHMARK RUN", ctx.fonts.small_bold, ctx.hover == Target::BenchmarkRun, COL_AMBER, Target::BenchmarkRun, hits);
+    let b_cln = RECT::new(b_bm.left - 104, r.top + 22, b_bm.left - 8, r.top + 56);
     draw_button(hdc, b_cln, "CLEAN LOGS", ctx.fonts.small_bold, ctx.hover == Target::CleanOldLogs, COL_CORAL, Target::CleanOldLogs, hits);
 
     draw_line(hdc, r.left + 24, r.top + 80, r.right - 24, r.top + 80, COL_BORDER, 1);
@@ -2179,6 +2243,58 @@ unsafe fn draw_logs(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         }
         term_r.top += 42;
     }
+    // Live RAM / Commit / VRAM Headroom Sparkline card
+    if ctx.free_ram_history.len() >= 2 {
+        let sp_r = RECT::new(term_r.left, term_r.top, term_r.right, term_r.top + 54);
+        rounded_rect(hdc, sp_r, COL_PANEL_ALT, COL_BORDER, 10);
+        let cw = (sp_r.width() - 28) / 3;
+        let free_pct = ctx.free_ram_history.last().copied().unwrap_or(0);
+        let com_gb = ctx.avail_commit_history.last().copied().unwrap_or(0);
+        let vram_pct = ctx.vram_headroom_history.last().copied().unwrap_or(0);
+        let cards = [
+            (format!("FREE RAM {}%", free_pct), ctx.free_ram_history, COL_EMERALD),
+            (format!("AVAIL COMMIT {} GB", com_gb), ctx.avail_commit_history, COL_CYAN),
+            (format!("VRAM CEIL {}%", vram_pct), ctx.vram_headroom_history, COL_PINK),
+        ];
+        for (ci, (lbl, samples, col)) in cards.iter().enumerate() {
+            let cx = sp_r.left + 10 + ci as i32 * (cw + 4);
+            draw_text(hdc, lbl, RECT::new(cx, sp_r.top + 4, cx + cw, sp_r.top + 20), ctx.fonts.small_bold, *col, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            draw_sparkline(hdc, RECT::new(cx, sp_r.top + 22, cx + cw - 8, sp_r.bottom - 6), samples, *col);
+        }
+        term_r.top += 60;
+    }
+
+    // In-App A/B Log Comparator (COMPARE LAST 2 RUNS)
+    if ctx.show_log_compare {
+        let cmp_r = RECT::new(term_r.left, term_r.top, term_r.right, term_r.top + 96);
+        rounded_rect(hdc, cmp_r, COL_PANEL_ALT, COL_CYAN, 10);
+        if let Some(cmp) = ctx.log_comparison {
+            let win_col = if cmp.winner == "NEW" { COL_EMERALD } else if cmp.winner == "PREV" { COL_AMBER } else { COL_CYAN };
+            draw_text(hdc, &format!("COMPARE LAST 2 RUNS  ·  {}", cmp.delta_summary), RECT::new(cmp_r.left + 12, cmp_r.top + 6, cmp_r.right - 12, cmp_r.top + 24), ctx.fonts.small_bold, win_col, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            let half = (cmp_r.width() - 30) / 2;
+            for (idx, (tag, st_r, bd_col)) in [
+                ("NEW", &cmp.run_a, if cmp.winner == "NEW" { COL_EMERALD } else { COL_BORDER }),
+                ("PREV", &cmp.run_b, if cmp.winner == "PREV" { COL_AMBER } else { COL_BORDER }),
+            ].iter().enumerate() {
+                let bx = cmp_r.left + 10 + idx as i32 * (half + 10);
+                let br = RECT::new(bx, cmp_r.top + 28, bx + half, cmp_r.bottom - 8);
+                rounded_rect(hdc, br, COL_SIDEBAR, *bd_col, 8);
+                let fps_s = match (st_r.avg_fps, st_r.min_fps, st_r.max_fps) {
+                    (Some(a), Some(mn), Some(mx)) => format!("World {a:.1} FPS ({mn:.1}-{mx:.1})"),
+                    _ => "No open-world FPS".into(),
+                };
+                let gpu_s = st_r.avg_gpu_ms.map(|g| format!("{g:.0}ms GPU")).unwrap_or_else(|| "n/a GPU".into());
+                let l1 = format!("{tag}: {} · {} · {} · {}", st_r.name, st_r.console, st_r.resolution, st_r.flags_summary);
+                let l2 = format!("{fps_s} · {gpu_s} · Mem:{} Copy:{} Room:{}", st_r.host_mem_warns, st_r.card_copy_warns, st_r.no_room_warns);
+                draw_text(hdc, &l1, RECT::new(br.left + 8, br.top + 4, br.right - 8, br.top + 26), ctx.fonts.small_bold, COL_WHITE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+                draw_text(hdc, &l2, RECT::new(br.left + 8, br.top + 28, br.right - 8, br.bottom - 4), ctx.fonts.small, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+            }
+        } else {
+            draw_text(hdc, "COMPARE LAST 2 RUNS: Need at least 2 GM6-*.log files in logs\\ (use BENCHMARK RUN for full FPS telemetry).", RECT::new(cmp_r.left + 14, cmp_r.top + 10, cmp_r.right - 14, cmp_r.bottom - 10), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_VCENTER | DT_WORDBREAK);
+        }
+        term_r.top += 102;
+    }
+
     // Log filter strip (ALL / ERRORS / WARNS / FPS) + COPY TAIL
     let fbar = RECT::new(term_r.left, term_r.top, term_r.right, term_r.top + 30);
     let flabels = ["ALL LINES", "ERRORS", "WARNINGS", "FPS / GPU"];
@@ -2402,7 +2518,7 @@ unsafe fn draw_bench_input(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Ve
     draw_text(hdc, "SESSION BENCHMARK LEADERBOARD", RECT::new(right_r.left + 14, right_top, right_r.right - 14, right_top + 20), ctx.fonts.small_bold, COL_ORANGE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     if ctx.recent_sessions.is_empty() {
-        draw_text(hdc, "No recorded sessions yet.\n\nLaunch your title and play for a few seconds — Game Master 6 automatically logs FPS, duration, exit code, and slowest shader per runner.", RECT::new(right_r.left + 16, right_top + 26, right_r.right - 16, right_r.bottom - 16), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_WORDBREAK);
+        draw_text(hdc, "No recorded sessions yet.\n\nLaunch Title and play for a few seconds — Game Master automatically logs FPS, duration, exit code, and slowest shader per runner.", RECT::new(right_r.left + 16, right_top + 26, right_r.right - 16, right_r.bottom - 16), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_WORDBREAK);
         return;
     }
 
@@ -2447,9 +2563,13 @@ unsafe fn draw_settings(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(
     draw_button(hdc, open_r, "OPEN .SETTINGS", ctx.fonts.small_bold, ctx.hover == Target::OpenSettingsFile, COL_CYAN, Target::OpenSettingsFile, hits);
     let th_r = RECT::new(open_r.left - 138, r.top + 20, open_r.left - 10, r.top + 54);
     draw_button(hdc, th_r, ctx.settings.theme_label(), ctx.fonts.small_bold, ctx.hover == Target::CycleTheme, COL_PINK, Target::CycleTheme, hits);
+    let exp_p = RECT::new(th_r.left - 126, r.top + 20, th_r.left - 8, r.top + 54);
+    draw_button(hdc, exp_p, "EXPORT .JSON", ctx.fonts.small_bold, ctx.hover == Target::ExportPresetJson, COL_EMERALD, Target::ExportPresetJson, hits);
+    let imp_p = RECT::new(exp_p.left - 126, r.top + 20, exp_p.left - 8, r.top + 54);
+    draw_button(hdc, imp_p, "IMPORT .JSON", ctx.fonts.small_bold, ctx.hover == Target::ImportPresetJson, COL_AMBER, Target::ImportPresetJson, hits);
 
-    draw_text(hdc, "SETTINGS", RECT::new(r.left + 24, r.top + 16, (th_r.left - 16).max(r.left + 160), r.top + 48), ctx.fonts.heading, COL_WHITE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-    draw_text(hdc, "All edits persist automatically to GameMaster.settings beside the application.", RECT::new(r.left + 24, r.top + 48, (th_r.left - 16).max(r.left + 320), r.top + 68), ctx.fonts.small, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(hdc, "SETTINGS", RECT::new(r.left + 24, r.top + 16, (imp_p.left - 16).max(r.left + 140), r.top + 48), ctx.fonts.heading, COL_WHITE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    draw_text(hdc, "All edits persist automatically to GameMaster.settings beside the application.", RECT::new(r.left + 24, r.top + 48, (imp_p.left - 16).max(r.left + 300), r.top + 68), ctx.fonts.small, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     draw_line(hdc, r.left + 24, r.top + 76, r.right - 24, r.top + 76, COL_BORDER, 1);
 
@@ -2467,8 +2587,12 @@ unsafe fn draw_settings(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(
         let row = RECT::new(r.left + 24, y, r.right - 24, y + p_h);
         rounded_rect(hdc, row, COL_PANEL_ALT, COL_BORDER, 10);
         draw_text(hdc, lbl, RECT::new(row.left + 14, row.top + 3, row.left + 250, row.top + 20), ctx.fonts.small_bold, COL_CYAN, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        let display_val = if val.trim().is_empty() { "(Not set — click Browse or Paste)" } else { val };
-        draw_text(hdc, display_val, RECT::new(row.left + 14, row.top + 20, row.right - 216, row.bottom - 3), ctx.fonts.small, if val.trim().is_empty() { COL_MUTED } else { COL_TEXT }, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
+        let display_val = if val.trim().is_empty() {
+            "(Not set — click Browse or Paste)".to_string()
+        } else {
+            crate::config::truncate_utf8_mid(val, 72)
+        };
+        draw_text(hdc, &display_val, RECT::new(row.left + 14, row.top + 20, row.right - 216, row.bottom - 3), ctx.fonts.small, if val.trim().is_empty() { COL_MUTED } else { COL_TEXT }, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
         let btn = RECT::new(row.right - 116, row.top + 6, row.right - 10, row.bottom - 6);
         draw_button(hdc, btn, "BROWSE...", ctx.fonts.small_bold, ctx.hover == *target, COL_WHITE, *target, hits);
         let paste_tgt = Target::PastePath(idx);
@@ -2634,7 +2758,7 @@ unsafe fn draw_dock(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
             hits,
         );
     } else {
-        draw_text(hdc, "System ready. Press LAUNCH TITLE (or Ctrl+L) to start, or PREPARE CACHE before your first session.", RECT::new(feed_r.left + 18, feed_r.top + 52, feed_r.right - 18, feed_r.bottom - 14), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_WORDBREAK);
+        draw_text(hdc, "System ready. Press LAUNCH Title (or Ctrl+L) to start, or PREPARE CACHE before your first session.", RECT::new(feed_r.left + 18, feed_r.top + 52, feed_r.right - 18, feed_r.bottom - 14), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_WORDBREAK);
     }
 
     // Right: Launch Command Deck
@@ -2653,7 +2777,7 @@ unsafe fn draw_dock(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         FrameRect(hdc, &btn_r, br);
         DeleteObject(br);
     }
-    let btn_label = if active { "STOP RUNNER" } else { "LAUNCH TITLE" };
+    let btn_label = if active { "STOP RUNNER" } else { "LAUNCH Title" };
     draw_text(hdc, btn_label, btn_r, ctx.fonts.title, COL_WHITE, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     hits.push((btn_r, Target::LaunchOrStop));
 
@@ -2685,7 +2809,7 @@ unsafe fn draw_dock(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
 /// Strictly matches a local discovered runner against a PortWatch Live Feed project.
 /// Prevents `runners\baseline\victory.exe` from falsely matching upstream `Marvisak/VIctory`
 /// via substring path matching on `victory`.
-fn matches_portwatch_project(
+pub(crate) fn matches_portwatch_project(
     r: &crate::runners::DiscoveredRunner,
     runners_root: &std::path::Path,
     name_lc: &str,
@@ -2725,7 +2849,7 @@ mod tests {
     #[test]
     fn baseline_does_not_match_marvisak_victory() {
         let runners_root = PathBuf::from(r"C:\GM\runners");
-        let base_runner = DiscoveredRunner {
+        let baseline = DiscoveredRunner {
             name: "baseline".into(),
             path: runners_root.join("baseline").join("victory.exe"),
             kind: RunnerKind::Baseline,
@@ -2737,7 +2861,7 @@ mod tests {
             built_at: String::new(),
         };
         assert!(!matches_portwatch_project(
-            &base_runner,
+            &baseline,
             &runners_root,
             "victory",
             "victory",

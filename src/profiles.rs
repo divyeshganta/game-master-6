@@ -1,5 +1,5 @@
-//! Portable Community Profile Export / Import (`.gmprofile`) for v1.0
-//! Allows sharing hardware-tuned presets, Advanced flags, HUD mode, and keymaps.
+//! Portable Community Profile Export / Import (`.gmprofile`) for v1.2
+//! Allows sharing hardware-tuned Baseline presets, Advanced flags, HUD mode, and keymaps.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ pub fn export_profile(s: &Settings, name: &str) -> Result<PathBuf, String> {
     };
     let dest = dir.join(format!("{stem}.gmprofile"));
     let body = format!(
-        "# Game Master 6 v1.0 Portable Profile\n\
+        "# Game Master 6 v1.2 Portable Profile\n\
          active_preset={}\n\
          console={}\n\
          display_mode={}\n\

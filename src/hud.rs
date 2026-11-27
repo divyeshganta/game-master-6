@@ -1,4 +1,4 @@
-//! Universal-Standard Performance Overlay (v1.0 — RTSS / MangoHud / Steam Standard)
+//! Universal-Standard Performance Overlay (v1.2 — RTSS / MangoHud / Steam Standard)
 //! Supports 3 density modes:
 //!   0 = COMPACT   (380x36 sleek horizontal telemetry strip)
 //!   1 = STANDARD  (316x118 MangoHud/RTSS card: FPS, 1% Low, [WORLD]/[MENU], Frame/GPU ms, RAM/Commit, live 60-sample frametime sparkline)
@@ -186,7 +186,7 @@ impl HudOverlay {
         }
         let world_tag = if draws >= 500 { "WORLD" } else { "MENU" };
         let summary = format!(
-            "GM6 · {:.1} FPS [{world_tag}] · {:.1}ms (GPU {:.1}ms) · RAM {:.1}G",
+            "Title · {:.1} FPS [{world_tag}] · {:.1}ms (GPU {:.1}ms) · RAM {:.1}G",
             fps, frame_ms, gpu_ms, ws_gb
         );
         if let Ok(mut g) = HUD_STATE.lock() {
@@ -428,7 +428,7 @@ unsafe extern "system" fn hud_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lp
     }
 }
 
-// ─── v1.0 PC-Style Click-Through Crosshair Overlay ─────────────────────────
+// ─── v1.2 Standard-Style Click-Through Crosshair Overlay ─────────────────────
 static CROSSHAIR_AIM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub struct CrosshairOverlay {

@@ -1,4 +1,4 @@
-//! Native Zero-Lag Background VRAM Scanner (v1.0)
+//! Native Zero-Lag Background VRAM Vampire Scanner (v1.2)
 //! Uses pure Win32 Toolhelp32 snapshot (<2ms, zero PowerShell, strictly read-only)
 //! to detect active GPU-accelerated desktop apps eating dedicated VRAM before launch.
 

@@ -10,6 +10,46 @@ use crate::win32::{
     PF_AVX2_INSTRUCTIONS_AVAILABLE, SM_CXSCREEN, SM_CYSCREEN, SYSTEM_INFO,
 };
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum GpuArch {
+    #[default]
+    Unknown,
+    NvidiaBlackwell,
+    NvidiaAdaAmpere,
+    AmdRdna,
+    Other,
+}
+
+impl GpuArch {
+    pub fn detect(gpu_name: &str) -> Self {
+        let lower = gpu_name.to_ascii_lowercase();
+        if lower.is_empty() {
+            return GpuArch::Unknown;
+        }
+        if lower.contains("nvidia") || lower.contains("geforce") || lower.contains("rtx") {
+            if lower.contains("rtx 50") || lower.contains("5090") || lower.contains("5080") || lower.contains("5070") || lower.contains("5060") || lower.contains("blackwell") {
+                GpuArch::NvidiaBlackwell
+            } else {
+                GpuArch::NvidiaAdaAmpere
+            }
+        } else if lower.contains("amd") || lower.contains("radeon") || lower.contains("rx ") {
+            GpuArch::AmdRdna
+        } else {
+            GpuArch::Other
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            GpuArch::Unknown => "Auto",
+            GpuArch::NvidiaBlackwell => "NVIDIA Blackwell",
+            GpuArch::NvidiaAdaAmpere => "NVIDIA Ada/Ampere",
+            GpuArch::AmdRdna => "AMD RDNA",
+            GpuArch::Other => "Generic GPU",
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct SystemInfo {
     pub cpu_cores: u32,
@@ -24,6 +64,7 @@ pub struct SystemInfo {
     pub xinput_pads: u32,
     pub xinput_pad_details: [XInputPadInfo; 4],
     pub gpu_name: String,
+    pub gpu_arch: GpuArch,
     pub gpu_driver: String,
     pub vram_gb: f64,
     pub display_count: u32,
@@ -104,6 +145,43 @@ impl SystemInfo {
     pub fn recommended_jobs(&self) -> u32 {
         ((self.cpu_cores * 2) / 3).clamp(4, 16)
     }
+
+    /// Warns when Windows commit limit is below 40 GB (open-world streaming risk).
+    pub fn pagefile_warning(&self) -> Option<String> {
+        if self.total_commit_gb > 0.1 && self.total_commit_gb < 40.0 {
+            Some(format!(
+                "Commit limit is {:.1} GB (< 40 GB recommended — expand Windows pagefile if crashes occur).",
+                self.total_commit_gb
+            ))
+        } else {
+            None
+        }
+    }
+}
+
+/// Safely terminates a user-selected non-system process by image name (never system processes).
+pub fn kill_process_by_name(name: &str) -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    let clean = name.trim();
+    if clean.is_empty() {
+        return false;
+    }
+    let lower = clean.to_ascii_lowercase();
+    const PROTECTED: &[&str] = &[
+        "explorer", "svchost", "csrss", "dwm", "lsass", "winlogon", "services", "smss",
+        "system", "wininit", "fontdrvhost", "sihost", "ctfmon", "victory", "gamemaster", "game master",
+    ];
+    if PROTECTED.iter().any(|p| lower.contains(p)) {
+        return false;
+    }
+    let img = if lower.ends_with(".exe") { clean.to_string() } else { format!("{clean}.exe") };
+    std::process::Command::new("taskkill")
+        .args(["/F", "/IM", &img])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false)
 }
 
 #[derive(Clone, Debug)]
@@ -337,7 +415,7 @@ fn friendly_proc_name(exe: &str) -> Option<String> {
         "runtimebroker", "shellexperiencehost", "startmenuexperiencehost", "textinputhost",
         "taskhostw", "ctfmon", "conhost", "audiodg", "spoolsv", "msmpeng", "nissrv",
         "securityhealthservice", "wmiprvse", "tasklist", "gamemaster", "game master",
-        "victory", "victory-diag", "gamerunner", "sihost", "dllhost",
+        "victory", "victory-diag", "gamerunner", "game_console_master", "sihost", "dllhost",
         "dashost", "wlanext", "spoolsv", "nvcontainer", "nvdisplay.container",
     ];
     if base.is_empty() || IGNORE.contains(&base) {
@@ -611,7 +689,7 @@ pub fn export_report(s: &Settings, sys: &SystemInfo, audit: &AssetAudit, data_la
     let path = dir.join(format!("system-report-{}.txt", local_timestamp_filename()));
     let mut out = String::new();
     out.push_str("============================================================\n");
-    out.push_str("  GAME MASTER 6 v1.0  |  LOCAL SYSTEM REPORT\n");
+    out.push_str("  Game Master 6 - GAME MASTER v1.2  |  LOCAL SYSTEM REPORT\n");
     out.push_str("============================================================\n");
     out.push_str(&format!("Generated       : {}\n", local_timestamp_human()));
     out.push_str(&format!("App Directory   : {}\n", Settings::app_dir().display()));
@@ -642,7 +720,7 @@ pub fn export_report(s: &Settings, sys: &SystemInfo, audit: &AssetAudit, data_la
     out.push_str(&format!("GPU Timing        : {}\n", if s.gpu_timing { "ON" } else { "OFF" }));
     out.push_str(&format!("Frame Capture     : {}\n", if s.capture { "ON" } else { "OFF" }));
     out.push_str(&format!("Shader Loop Limit : {}\n", if s.shader_loop_limit.is_empty() { "AUTO" } else { &s.shader_loop_limit }));
-    out.push_str(&format!("Pipeline Perf     : async_submit={} queue2={} indirect_window={} texture_no_wait={} merge_passes={}\n", s.async_submit, s.queue2, s.indirect_window, s.texture_no_wait, s.merge_passes));
+    out.push_str(&format!("v11 Perf Switches : async_submit={} queue2={} indirect_window={} texture_no_wait={} merge_passes={}\n", s.async_submit, s.queue2, s.indirect_window, s.texture_no_wait, s.merge_passes));
     out.push_str(&format!("Title Args        : {}\n\n", if s.title_args.is_empty() { "(none)" } else { &s.title_args }));
 
     out.push_str(&format!("[ASSET AUDIT: {}/{} CORE CHECKS PASSED]\n", audit.passed, audit.total));
@@ -786,6 +864,23 @@ pub fn latest_victory_crashes_log() -> Option<(String, PathBuf)> {
 
 /// Exports a single ready-to-paste Markdown AI Debug Bundle containing hardware, settings,
 /// audit, recent session benchmarks, slow shaders, active log tail, and crashes.log tail.
+/// Scrubs local Windows user profile paths before exporting an anonymized bug-report bundle.
+pub fn scrub_user_paths(input: &str) -> String {
+    let mut s = input.to_string();
+    if let Ok(profile) = std::env::var("USERPROFILE") {
+        if !profile.is_empty() {
+            s = s.replace(&profile, "%USERPROFILE%");
+        }
+    }
+    if let Ok(user) = std::env::var("USERNAME") {
+        if !user.is_empty() {
+            s = s.replace(&format!("\\Users\\{user}\\"), "\\Users\\<user>\\");
+            s = s.replace(&format!("/Users/{user}/"), "/Users/<user>/");
+        }
+    }
+    s
+}
+
 pub fn export_ai_debug_bundle(
     s: &Settings,
     sys: &SystemInfo,
@@ -798,7 +893,7 @@ pub fn export_ai_debug_bundle(
     let dir = reports_dir();
     let path = dir.join(format!("ai-debug-bundle-{}.md", local_timestamp_filename()));
     let mut out = String::new();
-    out.push_str("# Game Master 6 v1.0 — AI Debug Bundle\n\n");
+    out.push_str("# Game Master 6 v1.2 — AI Debug Bundle\n\n");
     out.push_str(&format!("- **Generated:** {}\n", local_timestamp_human()));
     out.push_str(&format!("- **Build:** {} ({})\n", s.version_label(), data_label));
     out.push_str(&format!("- **Runner:** `{}` ({})\n", s.resolved_runner().display(), s.active_runner_kind().badge()));
@@ -813,7 +908,7 @@ pub fn export_ai_debug_bundle(
         if s.shader_loop_limit.is_empty() { "AUTO" } else { &s.shader_loop_limit },
         if s.skip_pipelines.is_empty() { "none" } else { &s.skip_pipelines },
         s.card_buffers_label(), s.card_rehash_runs, s.join_copies, s.timer_1ms));
-    out.push_str(&format!("- perf: async_submit=`{}` | queue2=`{}` | indirect_window=`{}` | texture_no_wait=`{}` | merge_passes=`{}`\n\n",
+    out.push_str(&format!("- v11 perf: async_submit=`{}` | queue2=`{}` | indirect_window=`{}` | texture_no_wait=`{}` | merge_passes=`{}`\n\n",
         s.async_submit, s.queue2, s.indirect_window, s.texture_no_wait, s.merge_passes));
 
     out.push_str(&format!("## Preflight Audit ({}/{})\n", audit.passed, audit.total));
@@ -866,8 +961,9 @@ pub fn export_ai_debug_bundle(
         }
     }
 
-    fs::write(&path, &out).map_err(|e| format!("Could not write AI debug bundle: {e}"))?;
-    Ok((path, out))
+    let scrubbed = scrub_user_paths(&out);
+    fs::write(&path, &scrubbed).map_err(|e| format!("Could not write AI debug bundle: {e}"))?;
+    Ok((path, scrubbed))
 }
 
 /// Deletes older session logs in `logs\`, keeping the newest `keep` files.
@@ -940,7 +1036,7 @@ pub fn parse_shader_census(lines: &[String]) -> ShaderCensus {
             format!("{translated}/{total} translated · {refused} refused ({})", reasons.join("; "))
         }
     } else {
-        "Shader translator active. Click RUN CENSUS to scan the local shader archive.".into()
+        "Baseline translator active. Click RUN CENSUS to scan the local shader archive.".into()
     };
     ShaderCensus { translated, total, refused, summary }
 }

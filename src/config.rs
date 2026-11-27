@@ -53,7 +53,7 @@ pub struct Settings {
     pub indirect_window: bool,
     pub texture_no_wait: bool,
     pub merge_passes: bool,
-    // v1.0 Apex FPS & KBM suite
+    // v1.2 Apex FPS & Standard KBM suite
     pub display_1080p: bool,
     pub wide_refresh: bool,
     pub wide_merge: bool,
@@ -63,14 +63,14 @@ pub struct Settings {
     pub ambient_fill: bool,
     pub hoist_clamps: bool,
     pub fast_cores: bool,
-    // v15.2 studio launcher & runner options
+    // v1.2 studio launcher & runner options
     pub thin_lists: bool,                // VICTORY_THIN=1 (opt-in parallel list translation)
     pub display_mode: String,            // "auto", "1920x1080", "2560x1440", "3840x2160"
     pub borderless: bool,                // Borderless fullscreen vs windowed
     pub queue2_landing_mb: String,       // "48", "96", "128" -> VICTORY_QUEUE2_LANDING_MB
     pub ambient_shade: String,           // VICTORY_AMBIENT_SHADE
     pub last_prepared_runner_sig: String,// "size:mtime" of runner that last prepared cache
-    // v1.0 hardware-adaptive & verified residency/pipeline settings
+    // v1.2 hardware-adaptive & verified Baseline residency/pipeline settings
     pub active_preset: String,           // "low", "balanced", "high", "custom"
     pub card_buffers_mb: String,         // "", "256", "512", "1024", "2048", "4096" -> VICTORY_CARD_BUFFERS_MB
     pub texture_room_percent: String,    // "88".."97" -> VICTORY_TEXTURE_ROOM_PERCENT
@@ -89,10 +89,17 @@ pub struct Settings {
     pub no_wait_resident: bool,          // VICTORY_WAIT_RESIDENT=0 (skip map/residency stalls)
     pub ambient_val: String,             // "off", "0.6", "0.8" -> VICTORY_AMBIENT
     pub ambient_air: String,             // "0", "1.0", "1.2", "1.5" -> VICTORY_AMBIENT_AIR
-    // v15.2 universal HUD density & keymap standard
+    // v1.2 universal HUD density & keymap standard
     pub hud_mode: u8,                    // 0=Compact, 1=Standard+FrametimeGraph, 2=Minimal
-    pub keymap_preset: String,           // "std-pc", "fps", "left-handed", "pad-only"
+    pub keymap_preset: String,           // "pc-std", "fps", "left-handed", "pad-only"
     pub ab_experiment: String,           // "off", "async-submit", "thin", "wide-refresh", "upload-ahead" -> VICTORY_AB
+    pub runner_env_overrides: Vec<(String, String)>, // per-runner KEY=VAL;... overrides keyed by runner_slug
+    pub win_x: i32,
+    pub win_y: i32,
+    pub win_w: i32,
+    pub win_h: i32,
+    pub pinned_baseline_runner: String,
+    pub pinned_baseline_locked: bool,
 }
 
 impl Default for Settings {
@@ -121,7 +128,7 @@ impl Default for Settings {
             isolated_cache: false,
             offline_mode: false,
             theme: "vice".into(),
-            // v15.2: Hardware-adaptive BALANCED baseline defaults (12 GB sweet spot)
+            // v1.2: Hardware-adaptive BALANCED baseline defaults (12 GB sweet spot)
             card_buffers_min_mb: "4".into(),
             card_rehash_runs: true,
             join_copies: true,
@@ -181,8 +188,15 @@ impl Default for Settings {
             ambient_val: "0.3".into(),
             ambient_air: "1.2".into(),
             hud_mode: 1,
-            keymap_preset: "std-pc".into(),
+            keymap_preset: "pc-std".into(),
             ab_experiment: "off".into(),
+            runner_env_overrides: Vec::new(),
+            win_x: -1,
+            win_y: -1,
+            win_w: 1360,
+            win_h: 820,
+            pinned_baseline_runner: String::new(),
+            pinned_baseline_locked: false,
         }
     }
 }
@@ -190,27 +204,10 @@ impl Default for Settings {
 impl Settings {
     pub fn app_dir() -> PathBuf {
         std::env::current_exe()
-            .unwrap_or_else(|_| PathBuf::from("GameMaster6.exe"))
+            .unwrap_or_else(|_| PathBuf::from("GameMaster.exe"))
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .to_path_buf()
-    }
-
-    /// Resolves a runtime asset (e.g. `logo.ico`, `logo.bmp`, fonts) beside the exe or in `assets/`.
-    pub fn resolve_asset(name: &str) -> PathBuf {
-        let beside = Self::app_dir().join(name);
-        if beside.is_file() {
-            return beside;
-        }
-        let in_assets = Self::app_dir().join("assets").join(name);
-        if in_assets.is_file() {
-            return in_assets;
-        }
-        let cwd_assets = PathBuf::from("assets").join(name);
-        if cwd_assets.is_file() {
-            return cwd_assets;
-        }
-        beside
     }
 
     pub fn path() -> PathBuf {
@@ -339,7 +336,20 @@ impl Settings {
                     "hud_mode" => s.hud_mode = v.trim().parse::<u8>().unwrap_or(1) % 3,
                     "keymap_preset" => if !v.trim().is_empty() { s.keymap_preset = v.trim().to_ascii_lowercase(); },
                     "ab_experiment" => if !v.trim().is_empty() { s.ab_experiment = v.trim().to_ascii_lowercase(); },
-                    _ => {}
+                    "win_x" => s.win_x = v.trim().parse().unwrap_or(-1),
+                    "win_y" => s.win_y = v.trim().parse().unwrap_or(-1),
+                    "win_w" => s.win_w = v.trim().parse().unwrap_or(1360).clamp(1080, 3840),
+                    "win_h" => s.win_h = v.trim().parse().unwrap_or(820).clamp(680, 2160),
+                    "pinned_baseline_runner" => s.pinned_baseline_runner = v.trim().to_string(),
+                    "pinned_baseline_locked" => s.pinned_baseline_locked = parse_bool(v),
+                    other => {
+                        if let Some(id) = other.strip_prefix("runner_env.") {
+                            let id_clean = id.trim().to_ascii_lowercase();
+                            if !id_clean.is_empty() && !v.trim().is_empty() {
+                                s.set_runner_env_for(&id_clean, v.trim());
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -355,8 +365,8 @@ impl Settings {
     }
 
     pub fn save(&self) -> Result<(), String> {
-        let text = format!(
-            "# Game Master 6 v1.0 settings\n\
+        let mut text = format!(
+            "# Game Master 6 v1.2 settings\n\
              exe={}\n\
              game_dir={}\n\
              runner={}\n\
@@ -438,7 +448,13 @@ impl Settings {
              ambient_air={}\n\
              hud_mode={}\n\
              keymap_preset={}\n\
-             ab_experiment={}\n",
+             ab_experiment={}\n\
+             win_x={}\n\
+             win_y={}\n\
+             win_w={}\n\
+             win_h={}\n\
+             pinned_baseline_runner={}\n\
+             pinned_baseline_locked={}\n",
             self.exe.trim(),
             self.game_dir.trim(),
             self.runner.trim(),
@@ -521,7 +537,18 @@ impl Settings {
             self.hud_mode,
             self.keymap_preset.trim(),
             self.ab_experiment.trim(),
+            self.win_x,
+            self.win_y,
+            self.win_w,
+            self.win_h,
+            self.pinned_baseline_runner.trim(),
+            bstr(self.pinned_baseline_locked),
         );
+        for (id, val) in &self.runner_env_overrides {
+            if !id.trim().is_empty() && !val.trim().is_empty() {
+                text.push_str(&format!("runner_env.{}={}\n", id.trim(), val.trim()));
+            }
+        }
         let dest = Self::path();
         let tmp = Self::app_dir().join("GameMaster.settings.tmp");
         if fs::write(&tmp, &text).is_ok() {
@@ -1025,6 +1052,109 @@ impl Settings {
             }
         }
     }
+
+    pub fn runner_env_for(&self, runner_id: &str) -> Option<&str> {
+        let key = runner_id.trim().to_ascii_lowercase();
+        self.runner_env_overrides
+            .iter()
+            .find(|(id, _)| id == &key)
+            .map(|(_, v)| v.as_str())
+    }
+
+    pub fn set_runner_env_for(&mut self, runner_id: &str, env_val: &str) {
+        let key = runner_id.trim().to_ascii_lowercase();
+        if key.is_empty() {
+            return;
+        }
+        let val = env_val.trim().to_string();
+        if let Some(entry) = self.runner_env_overrides.iter_mut().find(|(id, _)| id == &key) {
+            if val.is_empty() {
+                self.runner_env_overrides.retain(|(id, _)| id != &key);
+            } else {
+                entry.1 = val;
+            }
+        } else if !val.is_empty() {
+            self.runner_env_overrides.push((key, val));
+        }
+    }
+    pub fn export_preset_json(&self, dst: &Path) -> Result<(), String> {
+        let json = format!(
+            "{{\n\
+             \x20 \"console_model\": \"{}\",\n\
+             \x20 \"display_mode\": \"{}\",\n\
+             \x20 \"borderless\": {},\n\
+             \x20 \"active_preset\": \"{}\",\n\
+             \x20 \"card_buffers_min_mb\": \"{}\",\n\
+             \x20 \"card_buffers_mb\": \"{}\",\n\
+             \x20 \"texture_room_percent\": \"{}\",\n\
+             \x20 \"card_room_for_targets_mb\": \"{}\",\n\
+             \x20 \"relay_mode\": {},\n\
+             \x20 \"card_steps\": {},\n\
+             \x20 \"thin_lists\": {},\n\
+             \x20 \"upload_ahead\": {},\n\
+             \x20 \"no_wait_resident\": {},\n\
+             \x20 \"ambient_val\": \"{}\",\n\
+             \x20 \"ambient_air\": \"{}\"\n\
+             }}\n",
+            self.console_model.trim(),
+            self.display_mode.trim(),
+            self.borderless,
+            self.active_preset.trim(),
+            self.card_buffers_min_mb.trim(),
+            self.card_buffers_mb.trim(),
+            self.texture_room_percent.trim(),
+            self.card_room_for_targets_mb.trim(),
+            self.relay_mode,
+            self.card_steps,
+            self.thin_lists,
+            self.upload_ahead,
+            self.no_wait_resident,
+            self.ambient_val.trim(),
+            self.ambient_air.trim(),
+        );
+        fs::write(dst, json).map_err(|e| format!("Failed to export preset JSON: {e}"))
+    }
+
+    pub fn import_preset_json(&mut self, src: &Path) -> Result<(), String> {
+        let raw = fs::read_to_string(src).map_err(|e| format!("Failed to read preset JSON: {e}"))?;
+        for line in raw.lines() {
+            let trimmed = line.trim().trim_end_matches(',');
+            if let Some((k, v)) = trimmed.split_once(':') {
+                let key = k.trim().trim_matches('"');
+                let val = v.trim().trim_matches('"');
+                match key {
+                    "console_model" => if !val.is_empty() { self.console_model = val.to_string(); },
+                    "display_mode" => if !val.is_empty() { self.display_mode = val.to_string(); },
+                    "borderless" => self.borderless = parse_bool(val),
+                    "active_preset" => if !val.is_empty() { self.active_preset = val.to_string(); },
+                    "card_buffers_min_mb" => self.card_buffers_min_mb = val.to_string(),
+                    "card_buffers_mb" => self.card_buffers_mb = val.to_string(),
+                    "texture_room_percent" => self.texture_room_percent = val.to_string(),
+                    "card_room_for_targets_mb" => self.card_room_for_targets_mb = val.to_string(),
+                    "relay_mode" => self.relay_mode = val.parse().unwrap_or(self.relay_mode),
+                    "card_steps" => self.card_steps = val.parse().unwrap_or(self.card_steps),
+                    "thin_lists" => self.thin_lists = parse_bool(val),
+                    "upload_ahead" => self.upload_ahead = parse_bool(val),
+                    "no_wait_resident" => self.no_wait_resident = parse_bool(val),
+                    "ambient_val" => self.ambient_val = val.to_string(),
+                    "ambient_air" => self.ambient_air = val.to_string(),
+                    _ => {}
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn truncate_utf8_mid(s: &str, max_chars: usize) -> String {
+    let count = s.chars().count();
+    if count <= max_chars || max_chars < 6 {
+        return s.to_string();
+    }
+    let keep = (max_chars - 3) / 2;
+    let head: String = s.chars().take(keep).collect();
+    let tail: String = s.chars().skip(count - (max_chars - 3 - keep)).collect();
+    format!("{head}...{tail}")
 }
 
 #[cfg(test)]
@@ -1046,6 +1176,8 @@ mod tests {
         s.game_dir = format!(r"C:\Titles\日本語\テスト\{long_seg}");
         s.runner = r"C:\Tools\日本語\victory.exe".into();
         s.upscaler_dir = r"C:\Tools\FSR_テスト".into();
+        s.set_runner_env_for("xcl", "XCL_LOG=warn;XCL_TEST=1");
+        assert_eq!(s.runner_env_for("xcl"), Some("XCL_LOG=warn;XCL_TEST=1"));
         assert_eq!(s.resolved_runner(), PathBuf::from(r"C:\Tools\日本語\victory.exe"));
         assert!(s.is_series_s());
     }

@@ -1,8 +1,8 @@
 use std::fs::{self, OpenOptions};
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
-use crate::diagnostics::{extract_slow_shaders, logs_dir, read_log_tail, reports_dir, SlowShader};
+use crate::diagnostics::{extract_slow_shaders, logs_dir, read_log_tail, reports_dir, strip_ansi, SlowShader, SystemInfo};
 use crate::win32::local_timestamp_human;
 
 #[derive(Clone, Debug)]
@@ -75,7 +75,7 @@ pub fn load_recent_sessions(limit: usize) -> Vec<SessionRecord> {
     rows
 }
 
-/// Extracts average 3D-world FPS (lines with `draws/frame` >= 500),
+/// Extracts average 3D-world FPS (lines with `draws/frame` >= 500, matching Baseline capture.rs:123),
 /// so menu/loading 30 FPS never masks real in-world gameplay FPS.
 pub fn extract_world_avg_fps(lines: &[String]) -> Option<f64> {
     let mut sum = 0.0f64;
@@ -104,7 +104,7 @@ pub fn extract_world_avg_fps(lines: &[String]) -> Option<f64> {
     if cnt > 0 { Some(sum / cnt as f64) } else { None }
 }
 
-/// Classifies the primary runtime bottleneck directly from runner log signals.
+/// Classifies the primary runtime bottleneck directly from Baseline log signals.
 pub fn classify_bottleneck(lines: &[String]) -> &'static str {
     let mut vram_hit = false;
     let mut commit_hit = false;
@@ -493,4 +493,380 @@ pub fn aggregate_by_runner(installed_runners: &[String]) -> Vec<RunnerBenchSumma
     });
     out.truncate(4);
     out
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct LogRunStats {
+    pub name: String,
+    pub console: String,
+    pub resolution: String,
+    pub flags_summary: String,
+    pub avg_fps: Option<f64>,
+    pub min_fps: Option<f64>,
+    pub max_fps: Option<f64>,
+    pub avg_gpu_ms: Option<f64>,
+    pub host_mem_warns: usize,
+    pub card_copy_warns: usize,
+    pub no_room_warns: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct LogComparison {
+    pub run_a: LogRunStats,
+    pub run_b: LogRunStats,
+    pub winner: &'static str,
+    pub delta_summary: String,
+}
+
+fn extract_env_token(line: &str, key: &str) -> Option<String> {
+    let idx = line.find(key)?;
+    let rest = line.get(idx + key.len()..)?;
+    let val = rest.split_whitespace().next()?.trim();
+    if val.is_empty() { None } else { Some(val.to_string()) }
+}
+
+/// Parses a single log (plain or ANSI-colored) into structured A/B comparison telemetry.
+pub fn parse_log_run_stats(name: &str, raw_lines: &[String]) -> LogRunStats {
+    let mut st = LogRunStats {
+        name: name.to_string(),
+        console: "series-s".into(),
+        resolution: "auto".into(),
+        ..Default::default()
+    };
+    let mut relay = "-";
+    let mut steps = "-";
+    let mut tex = "-";
+    let mut bmin = "-";
+    let mut relay_s = String::new();
+    let mut steps_s = String::new();
+    let mut tex_s = String::new();
+    let mut bmin_s = String::new();
+
+    let mut world_fps: Vec<f64> = Vec::new();
+    let mut all_fps: Vec<f64> = Vec::new();
+    let mut gpu_ms_samples: Vec<f64> = Vec::new();
+
+    for raw in raw_lines {
+        let line = strip_ansi(raw);
+        let lo = line.to_ascii_lowercase();
+
+        if lo.starts_with("console") && line.contains(':') {
+            if let Some((_, v)) = line.split_once(':') {
+                let cv = v.trim();
+                if !cv.is_empty() {
+                    st.console = cv.to_string();
+                }
+            }
+        }
+        if line.contains("VICTORY_DISPLAY_MODE=") {
+            if let Some(v) = extract_env_token(&line, "VICTORY_DISPLAY_MODE=") {
+                st.resolution = v;
+            }
+        }
+        if let Some(v) = extract_env_token(&line, "VICTORY_RELAY=") {
+            relay_s = v;
+            relay = &relay_s;
+        }
+        if let Some(v) = extract_env_token(&line, "VICTORY_CARD_STEPS=") {
+            steps_s = v;
+            steps = &steps_s;
+        }
+        if let Some(v) = extract_env_token(&line, "VICTORY_TEXTURE_ROOM_PERCENT=") {
+            tex_s = v;
+            tex = &tex_s;
+        }
+        if let Some(v) = extract_env_token(&line, "VICTORY_CARD_BUFFERS_MIN_MB=") {
+            bmin_s = v;
+            bmin = &bmin_s;
+        }
+
+        if lo.contains("host memory pressure") {
+            st.host_mem_warns += 1;
+        }
+        if lo.contains("no card copy for a title buffer") {
+            st.card_copy_warns += 1;
+        }
+        if lo.contains("the card has no room for more") {
+            st.no_room_warns += 1;
+        }
+
+        if let Some(fi) = line.find(" fps,") {
+            if let Some(v) = line[..fi]
+                .split_whitespace()
+                .last()
+                .and_then(|s| s.parse::<f64>().ok())
+            {
+                if v > 0.05 && v < 500.0 {
+                    all_fps.push(v);
+                    let draws = line
+                        .find(" draws/frame")
+                        .and_then(|di| line[..di].split_whitespace().last())
+                        .and_then(|s| s.parse::<u32>().ok())
+                        .unwrap_or(0);
+                    if v < 20.0 || draws >= 500 {
+                        world_fps.push(v);
+                    }
+                }
+            }
+        }
+        if let Some(gi) = line.find(" on the GPU") {
+            if let Some(ms) = line[..gi]
+                .split_whitespace()
+                .last()
+                .and_then(|s| s.parse::<f64>().ok())
+            {
+                if ms > 0.0 && ms < 60000.0 {
+                    gpu_ms_samples.push(ms);
+                }
+            }
+        }
+    }
+
+    st.flags_summary = format!("R{relay} S{steps} T{tex}% B{bmin}");
+    let fps_set = if !world_fps.is_empty() { &world_fps } else { &all_fps };
+    if !fps_set.is_empty() {
+        let sum: f64 = fps_set.iter().sum();
+        let min = fps_set.iter().copied().fold(f64::INFINITY, f64::min);
+        let max = fps_set.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        st.avg_fps = Some(sum / fps_set.len() as f64);
+        st.min_fps = Some(min);
+        st.max_fps = Some(max);
+    }
+    if !gpu_ms_samples.is_empty() {
+        let gsum: f64 = gpu_ms_samples.iter().sum();
+        st.avg_gpu_ms = Some(gsum / gpu_ms_samples.len() as f64);
+    }
+    st
+}
+
+pub fn compare_two_stats(run_a: LogRunStats, run_b: LogRunStats) -> LogComparison {
+    let fps_a = run_a.avg_fps.unwrap_or(0.0);
+    let fps_b = run_b.avg_fps.unwrap_or(0.0);
+    let dfps = fps_a - fps_b;
+    let dgpu = match (run_a.avg_gpu_ms, run_b.avg_gpu_ms) {
+        (Some(ga), Some(gb)) => Some(ga - gb),
+        _ => None,
+    };
+    let winner = if dfps > 0.15 {
+        "NEW"
+    } else if dfps < -0.15 {
+        "PREV"
+    } else if let Some(dg) = dgpu {
+        if dg < -5.0 { "NEW" } else if dg > 5.0 { "PREV" } else { "TIE" }
+    } else {
+        "TIE"
+    };
+    let gpu_txt = dgpu
+        .map(|d| format!(" · {:+.1} ms GPU", d))
+        .unwrap_or_default();
+    let delta_summary = format!("WINNER: {winner} ({:+.1} FPS{gpu_txt})", dfps);
+    LogComparison {
+        run_a,
+        run_b,
+        winner,
+        delta_summary,
+    }
+}
+
+/// Parses and compares the two most recent `GM6-*.log` files in `logs/`.
+pub fn compare_last_two_logs() -> Option<LogComparison> {
+    let rd = fs::read_dir(logs_dir()).ok()?;
+    let mut files: Vec<(std::time::SystemTime, String, PathBuf)> = rd
+        .flatten()
+        .filter_map(|e| {
+            let p = e.path();
+            let name = p.file_name()?.to_str()?.to_string();
+            if p.is_file() && name.starts_with("GM6-") && name.ends_with(".log") {
+                let m = e.metadata().ok()?.modified().ok()?;
+                Some((m, name, p))
+            } else {
+                None
+            }
+        })
+        .collect();
+    files.sort_by(|a, b| b.0.cmp(&a.0));
+    if files.len() < 2 {
+        return None;
+    }
+    let lines_a = read_log_tail(&files[0].2, 8000);
+    let lines_b = read_log_tail(&files[1].2, 8000);
+    let st_a = parse_log_run_stats(&files[0].1, &lines_a);
+    let st_b = parse_log_run_stats(&files[1].1, &lines_b);
+    Some(compare_two_stats(st_a, st_b))
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DoctorFix {
+    LowerTexRoom90,
+    EnableMemTrim,
+    PrepareCache,
+    SwitchBalanced1080p,
+}
+
+impl DoctorFix {
+    pub fn label(self) -> &'static str {
+        match self {
+            DoctorFix::LowerTexRoom90 => "APPLY FIX: CAP VRAM ROOM 90%",
+            DoctorFix::EnableMemTrim => "APPLY FIX: ENABLE MEM TRIM",
+            DoctorFix::PrepareCache => "APPLY FIX: PREPARE CACHE",
+            DoctorFix::SwitchBalanced1080p => "APPLY FIX: BALANCED 1080P",
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct AutoDoctorReport {
+    pub runner_name: String,
+    pub console: String,
+    pub gpu_label: String,
+    pub vram_gb: f64,
+    pub ram_gb: f64,
+    pub avg_fps: f64,
+    pub min_fps: f64,
+    pub max_fps: f64,
+    pub gpu_ms: f64,
+    pub prep_ms: f64,
+    pub diagnosis: String,
+    pub advice: String,
+    pub recommended_fix: Option<DoctorFix>,
+    pub crashed: bool,
+}
+
+impl AutoDoctorReport {
+    pub fn to_anonymized_markdown(&self) -> String {
+        format!(
+            "### Benchmark Summary\n\
+             - **Runner:** `{}` ({})\n\
+             - **Hardware:** {} ({:.0} GB VRAM, {:.0} GB RAM)\n\
+             - **3D Open-World FPS:** {:.2} avg (min {:.2} / max {:.2})\n\
+             - **Frame Breakdown:** GPU {:.1} ms | CPU Prepare {:.1} ms\n\
+             - **Auto-Doctor:** {} — {}\n",
+            self.runner_name,
+            self.console,
+            self.gpu_label,
+            self.vram_gb,
+            self.ram_gb,
+            self.avg_fps,
+            self.min_fps,
+            self.max_fps,
+            self.gpu_ms,
+            self.prep_ms,
+            self.diagnosis,
+            self.advice,
+        )
+    }
+}
+
+/// 5% Benchmark Gate: returns true only when candidate beats baseline by >5% with zero crashes.
+pub fn benchmark_beats_baseline(candidate_fps: f64, baseline_fps: f64, crashed: bool) -> bool {
+    !crashed && baseline_fps > 0.0 && candidate_fps >= baseline_fps * 1.05
+}
+
+/// Parses a finished session log into a plain-English Auto-Doctor report.
+pub fn analyze_session_log(runner_name: &str, log_path: &Path, sys: &SystemInfo, crashed: bool) -> AutoDoctorReport {
+    let lines = read_log_tail(log_path, 6000);
+    let stats = parse_log_run_stats(runner_name, &lines);
+    let mut no_room = false;
+    let mut pressure = false;
+    let mut missing_pipe = 0usize;
+    for raw in &lines {
+        let l = strip_ansi(raw);
+        if l.contains("the card has no room for more") {
+            no_room = true;
+        }
+        if l.contains("host memory pressure") {
+            pressure = true;
+        }
+        if l.contains("without a host pipeline") && !l.contains("dropped 0 without a host pipeline") {
+            missing_pipe += 1;
+        }
+    }
+    let avg_fps = stats.avg_fps.unwrap_or(0.0);
+    let min_fps = stats.min_fps.unwrap_or(0.0);
+    let max_fps = stats.max_fps.unwrap_or(0.0);
+    let gpu_ms = stats.avg_gpu_ms.unwrap_or(0.0);
+    let prep_ms = 0.0_f64;
+
+    let (diagnosis, advice, recommended_fix) = if crashed {
+        (
+            "Session Crashed".to_string(),
+            "Switch to BALANCED 1080p or rollback to pinned baseline.".to_string(),
+            Some(DoctorFix::SwitchBalanced1080p),
+        )
+    } else if missing_pipe > 10 && avg_fps < 5.0 {
+        (
+            "Missing Pipeline Cache".to_string(),
+            "Run Prepare Cache (translate --pipelines) before launching.".to_string(),
+            Some(DoctorFix::PrepareCache),
+        )
+    } else if no_room {
+        (
+            "VRAM Ceiling Reached".to_string(),
+            "Cap texture room to 90% and target room to 2048 MB to avoid WDDM spillover.".to_string(),
+            Some(DoctorFix::LowerTexRoom90),
+        )
+    } else if pressure {
+        (
+            "Host RAM Pressure".to_string(),
+            "Enable idle allocator/upload memory trimming and close background RAM hogs.".to_string(),
+            Some(DoctorFix::EnableMemTrim),
+        )
+    } else {
+        (
+            "Clean Run".to_string(),
+            "No VRAM exhaustion or host memory pressure detected.".to_string(),
+            None,
+        )
+    };
+
+    AutoDoctorReport {
+        runner_name: runner_name.to_string(),
+        console: if stats.console.is_empty() { "series-s".into() } else { stats.console },
+        gpu_label: if sys.gpu_name.is_empty() { sys.gpu_arch.label().into() } else { sys.gpu_name.clone() },
+        vram_gb: sys.vram_gb,
+        ram_gb: sys.total_ram_gb,
+        avg_fps,
+        min_fps,
+        max_fps,
+        gpu_ms,
+        prep_ms,
+        diagnosis,
+        advice,
+        recommended_fix,
+        crashed,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn log_comparator_parses_ansi_and_plain_open_world_metrics() {
+        let log_new = vec![
+            "console          : series-s".into(),
+            "gpu_offload_env  : VICTORY_DISPLAY_MODE=1600x900 VICTORY_RELAY=2 VICTORY_CARD_STEPS=2 VICTORY_TEXTURE_ROOM_PERCENT=94 VICTORY_CARD_BUFFERS_MIN_MB=4".into(),
+            "\x1b[32m2026-11-26T12:00:00Z INFO victory_gpu::host: 6.4 fps, 155.0 ms/frame (12.0 preparing; 120.0 on the GPU; 10.0 copying back), 3200 draws/frame\x1b[0m".into(),
+            "2026-11-26T12:00:05Z INFO victory_gpu::host: 7.2 fps, 138.0 ms/frame (12.0 preparing; 100.0 on the GPU; 10.0 copying back), 3400 draws/frame".into(),
+        ];
+        let log_old = vec![
+            "console          : series-s".into(),
+            "gpu_offload_env  : VICTORY_DISPLAY_MODE=1280x720 VICTORY_RELAY=1 VICTORY_CARD_STEPS=1 VICTORY_TEXTURE_ROOM_PERCENT=82 VICTORY_CARD_BUFFERS_MIN_MB=1".into(),
+            "2026-11-26T11:00:00Z INFO victory_gpu::host: 1.2 fps, 833.0 ms/frame (40.0 preparing; 780.0 on the GPU; 20.0 copying back), 3100 draws/frame".into(),
+            "WARN victory_gpu::residency: host memory pressure: limiting texture prefetch".into(),
+            "WARN victory_gpu::draw: no card copy for a title buffer".into(),
+            "WARN victory_gpu::draw: the card has no room for more".into(),
+        ];
+        let a = parse_log_run_stats("GM6-new.log", &log_new);
+        let b = parse_log_run_stats("GM6-old.log", &log_old);
+        assert_eq!(a.resolution, "1600x900");
+        assert_eq!(a.flags_summary, "R2 S2 T94% B4");
+        assert!((a.avg_fps.unwrap() - 6.8).abs() < 0.01);
+        assert!((a.avg_gpu_ms.unwrap() - 110.0).abs() < 0.01);
+        assert_eq!(b.host_mem_warns, 1);
+        assert_eq!(b.card_copy_warns, 1);
+        assert_eq!(b.no_room_warns, 1);
+        let cmp = compare_two_stats(a, b);
+        assert_eq!(cmp.winner, "NEW");
+    }
 }

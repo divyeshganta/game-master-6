@@ -33,7 +33,7 @@ impl RunnerKind {
 
     pub fn badge(self) -> &'static str {
         match self {
-            RunnerKind::Baseline => "BASELINE · VICTORY",
+            RunnerKind::Baseline => "BASELINE",
             RunnerKind::LocalZtrx => "LOCAL ZTRX",
             RunnerKind::VictoryFork => "VICTORY-FORK · RT",
             RunnerKind::Victory => "VICTORY UPSTREAM",
@@ -71,7 +71,7 @@ impl RunnerKind {
 
     pub fn detect_from_path(path: &Path) -> Self {
         let lower = path.to_string_lossy().to_ascii_lowercase();
-        if lower.contains("baseline") || lower.contains("cool_fox") {
+        if lower.contains("baseline") || lower.contains("cool_fox") || lower.contains("overnight-tuned") {
             RunnerKind::Baseline
         } else if lower.contains("diag") {
             RunnerKind::VictoryDiag
@@ -339,8 +339,8 @@ pub fn discover_runners(s: &Settings) -> Vec<DiscoveredRunner> {
         "xcl.exe",
         "xbox2windows.exe",
         "tuxbox.exe",
-        "runnerx.exe",
-        "openrunner.exe",
+        "consolex.exe",
+        "openconsole.exe",
     ] {
         push_candidate(app.join(fname), None);
     }
@@ -529,4 +529,46 @@ fn link_tree(src: &Path, dst: &Path) -> Result<usize, String> {
         }
     }
     Ok(count)
+}
+
+/// Computes lowercase SHA-256 hex digest of a file using PowerShell `Get-FileHash` (no console flash).
+pub fn sha256_file_hex(path: &Path) -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+    if !path.is_file() {
+        return None;
+    }
+    let esc = path.to_string_lossy().replace('\'', "''");
+    let ps = format!("(Get-FileHash -LiteralPath '{esc}' -Algorithm SHA256).Hash");
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    let hash = String::from_utf8_lossy(&out.stdout).trim().to_ascii_lowercase();
+    if hash.len() == 64 { Some(hash) } else { None }
+}
+
+/// Checks `.runner_hash` inside `cache_dir` against the active runner binary's SHA-256.
+/// Returns `Some((expected, actual))` if a mismatch is detected.
+pub fn check_cache_hash_mismatch(runner_path: &Path, cache_dir: &Path) -> Option<(String, String)> {
+    let marker = cache_dir.join(".runner_hash");
+    let recorded = fs::read_to_string(&marker).ok()?.trim().to_ascii_lowercase();
+    if recorded.len() != 64 {
+        return None;
+    }
+    let actual = sha256_file_hex(runner_path)?;
+    if recorded != actual {
+        Some((recorded, actual))
+    } else {
+        None
+    }
+}
+
+/// Records the active runner binary's SHA-256 into `cache_dir/.runner_hash` after shader prep.
+pub fn write_cache_hash(runner_path: &Path, cache_dir: &Path) {
+    if let Some(hash) = sha256_file_hex(runner_path) {
+        let _ = fs::create_dir_all(cache_dir);
+        let _ = fs::write(cache_dir.join(".runner_hash"), hash);
+    }
 }

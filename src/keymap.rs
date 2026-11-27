@@ -1,5 +1,5 @@
-//! Universal-Standard PC Open-World Keybinding & Remapping Engine (v1.0)
-//! Supports Standard PC, FPS Standard, Left-Handed (IJKL), and Pad-Only layouts,
+//! Universal-Standard PC Open-World Keybinding & Remapping Engine (v1.2)
+//! Supports Standard PC Standard, FPS Standard, Left-Handed (IJKL), and Pad-Only layouts,
 //! with context-aware conflict detection and clean `Settings::keymap` serialization.
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -12,7 +12,7 @@ pub enum ActionContext {
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum KeymapPreset {
-    StandardPc,
+    PcStandard,
     FpsStandard,
     LeftHanded,
     PadOnly,
@@ -21,7 +21,7 @@ pub enum KeymapPreset {
 impl KeymapPreset {
     pub fn id(self) -> &'static str {
         match self {
-            KeymapPreset::StandardPc => "std-pc",
+            KeymapPreset::PcStandard => "pc-std",
             KeymapPreset::FpsStandard => "fps",
             KeymapPreset::LeftHanded => "left-handed",
             KeymapPreset::PadOnly => "pad-only",
@@ -30,7 +30,7 @@ impl KeymapPreset {
 
     pub fn label(self) -> &'static str {
         match self {
-            KeymapPreset::StandardPc => "Standard PC",
+            KeymapPreset::PcStandard => "Standard PC",
             KeymapPreset::FpsStandard => "FPS / SHOOTER",
             KeymapPreset::LeftHanded => "LEFT-HANDED (IJKL)",
             KeymapPreset::PadOnly => "CONTROLLER ONLY",
@@ -39,10 +39,10 @@ impl KeymapPreset {
 
     pub fn cycle_next(self) -> Self {
         match self {
-            KeymapPreset::StandardPc => KeymapPreset::FpsStandard,
+            KeymapPreset::PcStandard => KeymapPreset::FpsStandard,
             KeymapPreset::FpsStandard => KeymapPreset::LeftHanded,
             KeymapPreset::LeftHanded => KeymapPreset::PadOnly,
-            KeymapPreset::PadOnly => KeymapPreset::StandardPc,
+            KeymapPreset::PadOnly => KeymapPreset::PcStandard,
         }
     }
 
@@ -51,7 +51,7 @@ impl KeymapPreset {
             "fps" => KeymapPreset::FpsStandard,
             "left-handed" | "ijkl" => KeymapPreset::LeftHanded,
             "pad-only" | "pad" => KeymapPreset::PadOnly,
-            _ => KeymapPreset::StandardPc,
+            _ => KeymapPreset::PcStandard,
         }
     }
 }
@@ -80,7 +80,7 @@ pub fn preset_bindings(preset: KeymapPreset) -> Vec<ActionBinding> {
         key: key.to_string(),
     };
     match preset {
-        KeymapPreset::StandardPc => vec![
+        KeymapPreset::PcStandard => vec![
             mk("move_fwd", "Move Forward", ActionContext::OnFoot, "W"),
             mk("move_back", "Move Back", ActionContext::OnFoot, "S"),
             mk("move_left", "Move Left", ActionContext::OnFoot, "A"),

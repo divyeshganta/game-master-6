@@ -47,8 +47,11 @@ pub fn latest_backup() -> Option<(String, PathBuf)> {
 }
 
 /// Copies VIctory's `%LOCALAPPDATA%\victory\data` saves/profiles into `backups\saves-<timestamp>\`
-/// and prunes older auto-backups beyond `keep_max`.
+/// Creates a rolling 5-slot ZIP backup of `%LOCALAPPDATA%\victory\data` in `backups\`
+/// and prunes older ZIPs beyond 5 slots.
 pub fn backup_saves() -> Result<(PathBuf, usize), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     let Some(src) = default_victory_data_dir() else {
         return Err("LOCALAPPDATA environment variable is unavailable.".into());
     };
@@ -58,15 +61,33 @@ pub fn backup_saves() -> Result<(PathBuf, usize), String> {
             src.display()
         ));
     }
-    let dest = backups_dir().join(format!("saves-{}", local_timestamp_filename()));
-    fs::create_dir_all(&dest).map_err(|e| format!("Could not create backup folder: {e}"))?;
-    let files = copy_dir_recursive(&src, &dest)?;
-    prune_old_backups(8);
-    Ok((dest, files))
+    let dir = backups_dir();
+    let _ = fs::create_dir_all(&dir);
+    let zip_path = dir.join(format!("saves-{}.zip", local_timestamp_filename()));
+    let src_esc = src.to_string_lossy().replace('\'', "''");
+    let dst_esc = zip_path.to_string_lossy().replace('\'', "''");
+    let ps = format!("Compress-Archive -Path '{src_esc}\\*' -DestinationPath '{dst_esc}' -Force");
+    let out = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .map_err(|e| format!("Failed to create save ZIP backup: {e}"))?;
+    if !out.status.success() {
+        // Fallback to folder copy if Compress-Archive fails (e.g. empty dir)
+        let dest = dir.join(format!("saves-{}", local_timestamp_filename()));
+        fs::create_dir_all(&dest).map_err(|e| format!("Could not create backup folder: {e}"))?;
+        let files = copy_dir_recursive(&src, &dest)?;
+        prune_old_backups(5);
+        return Ok((dest, files));
+    }
+    prune_old_backups(5);
+    Ok((zip_path, 1))
 }
 
-/// Restores the latest save backup snapshot back into `%LOCALAPPDATA%\victory\data`.
+/// Restores the latest save backup snapshot (ZIP or folder) back into `%LOCALAPPDATA%\victory\data`.
 pub fn restore_latest_backup() -> Result<(String, usize), String> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
     let Some((name, src)) = latest_backup() else {
         return Err("No save backups found in backups\\ yet.".into());
     };
@@ -74,6 +95,20 @@ pub fn restore_latest_backup() -> Result<(String, usize), String> {
         return Err("LOCALAPPDATA environment variable is unavailable.".into());
     };
     fs::create_dir_all(&dst).map_err(|e| format!("Could not prepare save destination: {e}"))?;
+    if src.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("zip")) {
+        let src_esc = src.to_string_lossy().replace('\'', "''");
+        let dst_esc = dst.to_string_lossy().replace('\'', "''");
+        let ps = format!("Expand-Archive -Path '{src_esc}' -DestinationPath '{dst_esc}' -Force");
+        let out = std::process::Command::new("powershell")
+            .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|e| format!("Failed to extract save ZIP: {e}"))?;
+        if !out.status.success() {
+            return Err(format!("Expand-Archive failed: {}", String::from_utf8_lossy(&out.stderr)));
+        }
+        return Ok((name, 1));
+    }
     let files = copy_dir_recursive(&src, &dst)?;
     Ok((name, files))
 }

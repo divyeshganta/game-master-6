@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 use crate::builder;
 use crate::config::Settings;
 use crate::saves::{self, ModItem};
-use crate::telemetry::{self, RunnerBenchSummary, SessionRecord};
+use crate::telemetry::{self, LogComparison, RunnerBenchSummary, SessionRecord};
 use crate::diagnostics::{
     clean_old_logs, compute_system_tip, export_ai_debug_bundle, export_report, export_tdr_reg, extract_slow_shaders, folder_stats, format_bytes, list_recent_logs, logs_dir, probe_top_ram_apps, read_log_tail,
     AssetAudit, LogEntry, ShaderCensus, SlowShader, SystemInfo,
@@ -87,6 +87,17 @@ struct AppState {
     last_tip_probe: Instant,
     is_first_run: bool,
     modal_open: bool,
+    benchmark_restore_log: Option<String>,
+    log_comparison: Option<LogComparison>,
+    show_log_compare: bool,
+    free_ram_history: Vec<u32>,
+    avail_commit_history: Vec<u32>,
+    vram_headroom_history: Vec<u32>,
+    last_headroom_sample: Instant,
+    adv_filter: &'static str,
+    auto_doctor: Option<telemetry::AutoDoctorReport>,
+    cache_hash_mismatch: bool,
+    beats_baseline: bool,
 }
 
 impl AppState {
@@ -328,19 +339,19 @@ unsafe fn handle_launch_or_stop(hwnd: HWND) {
             st.last_crash = None;
             st.status_text = "RUNNING".into();
             st.status_kind = StatusKind::Running;
-            st.log_lines = vec![format!("Started runner -> {}", sess.log_path.display())];
+            st.log_lines = vec![format!("Started Game Master 6 runner -> {}", sess.log_path.display())];
             st.log_scroll = 0;
             st.session = Some(sess);
             st.recent_logs = list_recent_logs(12);
             st.selected_log = 0;
-            st.set_toast("Launched title");
+            st.set_toast("Launched Title");
             st.fps_history.clear();
             if st.settings.hud_overlay {
                 if let Some(ref mut hud) = st.hud {
                     hud.set_mode(st.settings.hud_mode);
                     hud.set_corner(st.settings.hud_corner);
                     let rname = st.settings.resolved_runner().file_name().and_then(|s| s.to_str()).unwrap_or("runner").to_string();
-                    hud.update(&format!("GM6 · {rname} · STARTING..."), rgb(0, 240, 255));
+                    hud.update(&format!("Title · {rname} · STARTING..."), rgb(0, 240, 255));
                 }
             }
             if st.settings.zero_overhead {
@@ -352,7 +363,7 @@ unsafe fn handle_launch_or_stop(hwnd: HWND) {
         Err(e) => {
             st.status_text = "LAUNCH BLOCKED".into();
             st.status_kind = StatusKind::Error;
-            show_msg(hwnd, &e, "Cannot Launch Title", MB_ICONWARNING | MB_OK);
+            show_msg(hwnd, &e, "Cannot Launch Game Master 6", MB_ICONWARNING | MB_OK);
         }
     }
     redraw(hwnd);
@@ -433,6 +444,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
                 if st.session.is_none() {
                     st.load_selected_log();
                 }
+                st.log_comparison = telemetry::compare_last_two_logs();
             }
             if idx == 5 {
                 st.sync_telemetry_and_census(true);
@@ -644,6 +656,8 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         Target::SelectRunner(idx) => {
             if let Some(run) = st.runners.get(idx).cloned() {
                 let old_slug = runner_slug(&st.settings.resolved_runner(), st.settings.active_runner_kind());
+                let cur_env = st.settings.custom_env.clone();
+                st.settings.set_runner_env_for(&old_slug, &cur_env);
                 st.settings.save_runner_profile(&old_slug);
                 let app_dir = Settings::app_dir();
                 let rel = run
@@ -655,6 +669,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
                 st.settings.runner_kind = run.kind.id().into();
                 let new_slug = runner_slug(&run.path, run.kind);
                 let loaded_prof = st.settings.load_runner_profile(&new_slug);
+                st.settings.custom_env = st.settings.runner_env_for(&new_slug).unwrap_or("").to_string();
                 if st.settings.prefer_dgpu {
                     let _ = set_high_perf_gpu_preference(&run.path, true);
                 }
@@ -731,15 +746,40 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         }
         Target::BuildPortWatchRepo(idx) => {
             if let Some(proj) = st.portwatch.projects.get(idx).cloned() {
+                let runners_root = runners_dir();
+                let name_lc = proj.name.to_ascii_lowercase();
+                let slug_lc = proj.repo_slug();
+                let repo_lc = proj.repo.to_ascii_lowercase();
+                let existing_folder = st
+                    .runners
+                    .iter()
+                    .find(|r| {
+                        crate::render::matches_portwatch_project(
+                            r,
+                            &runners_root,
+                            &name_lc,
+                            &slug_lc,
+                            &repo_lc,
+                        )
+                    })
+                    .and_then(|r| {
+                        let parent = r.path.parent()?;
+                        if parent.parent() == Some(runners_root.as_path()) {
+                            parent.file_name().map(|s| s.to_string_lossy().to_string())
+                        } else {
+                            None
+                        }
+                    });
+                let target_name = existing_folder.unwrap_or_else(|| proj.name.clone());
                 let warn = format!(
-                    "Clone & compile community repository?\n\nRepo: https://github.com/{}\n\n                     SECURITY NOTICE: Compiling third-party repos runs their Cargo/CMake build scripts.                      The auto-builder scans build.rs / CMakeLists.txt for suspicious commands and backs up any previous .exe before replacing.\n\n                     Proceed only if you trust this repository.",
-                    proj.repo
+                    "Clone & compile community repository into runners\\{}?\n\nRepo: https://github.com/{}\n\nSECURITY NOTICE: Compiling third-party repos runs their Cargo/CMake build scripts. The auto-builder scans build.rs / CMakeLists.txt for suspicious commands and backs up any previous .exe before replacing.\n\nProceed only if you trust this repository.",
+                    target_name, proj.repo
                 );
                 let ok = show_msg(hwnd, &warn, "Confirm Safe Auto-Build", MB_ICONWARNING | MB_YESNO);
                 if ok == IDYES {
-                    match builder::launch_clone_and_build(&proj.repo, &proj.name) {
+                    match builder::launch_clone_and_build(&proj.repo, &target_name) {
                         Ok(()) => {
-                            st.set_toast(format!("Safe builder started for {} â€” click RESCAN when done", proj.name));
+                            st.set_toast(format!("Safe builder started for {} — click RESCAN when done", target_name));
                             redraw(hwnd);
                         }
                         Err(e) => {
@@ -835,11 +875,11 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         Target::BrowseExe => {
             let init = st.settings.exe.clone();
             if let Some(Some(p)) = run_modal(hwnd, || {
-                browse_file(hwnd, "Select title executable", &[("Executables (*.exe)", "*.exe"), ("All Files", "*.*")], &init)
+                browse_file(hwnd, "Select Title Executable", &[("Executables (*.exe)", "*.exe"), ("All Files", "*.*")], &init)
             }) {
                 let st = state(hwnd);
                 st.settings.exe = p;
-                st.save_settings("Title executable updated");
+                st.save_settings("Game executable updated");
                 redraw(hwnd);
             }
         }
@@ -847,7 +887,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             if let Some(Some(p)) = run_modal(hwnd, || browse_folder(hwnd, "Select Title Data Folder")) {
                 let st = state(hwnd);
                 st.settings.game_dir = p;
-                st.save_settings("Title data folder updated");
+                st.save_settings("Game data folder updated");
                 st.start_size_scan();
                 redraw(hwnd);
             }
@@ -872,11 +912,11 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
                     match idx {
                         0 => {
                             st.settings.exe = cleaned;
-                            st.save_settings("Pasted title executable path");
+                            st.save_settings("Pasted game executable path");
                         }
                         1 => {
                             st.settings.game_dir = cleaned;
-                            st.save_settings("Pasted title data folder");
+                            st.save_settings("Pasted game data folder");
                             st.start_size_scan();
                         }
                         _ => {
@@ -892,7 +932,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             }
         }
         Target::BrowseUpscalerDir => {
-            if let Some(Some(p)) = run_modal(hwnd, || browse_folder(hwnd, "Select Host Upscaler DLL Folder")) {
+            if let Some(Some(p)) = run_modal(hwnd, || browse_folder(hwnd, "Select Signed Host Upscaler DLL Folder")) {
                 let st = state(hwnd);
                 st.settings.upscaler_dir = p;
                 st.settings.upscaler_enabled = true;
@@ -1025,6 +1065,148 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             st.dismissed_warning = Some(st.system_tip.1.clone());
             st.set_toast("Notice dismissed");
             redraw(hwnd);
+        }
+        Target::CycleAdvFilter => {
+            st.adv_filter = match st.adv_filter {
+                "ALL" => "VRAM",
+                "VRAM" => "CPU",
+                "CPU" => "LIGHTING",
+                _ => "ALL",
+            };
+            st.set_toast(format!("Advanced filter: {}", st.adv_filter));
+            redraw(hwnd);
+        }
+        Target::PinBaseline => {
+            if st.settings.pinned_baseline_locked {
+                st.settings.pinned_baseline_locked = false;
+                st.save_settings("Baseline unlocked");
+            } else {
+                st.settings.pinned_baseline_runner = st.settings.runner.clone();
+                st.settings.pinned_baseline_locked = true;
+                st.save_settings("Pinned current runner & settings as baseline");
+                crate::guardian::record_known_good_if_stable(999, Some(0));
+            }
+            redraw(hwnd);
+        }
+        Target::RollbackBaseline => {
+            if let Ok(good) = crate::guardian::restore_last_known_good() {
+                st.settings = good;
+                st.save_settings("Rolled back to pinned baseline");
+            } else if !st.settings.pinned_baseline_runner.trim().is_empty() {
+                st.settings.runner = st.settings.pinned_baseline_runner.clone();
+                st.save_settings("Restored pinned baseline runner");
+            } else {
+                st.set_toast("No pinned baseline saved yet — click PIN BASELINE first");
+            }
+            redraw(hwnd);
+        }
+        Target::PromoteBaseline => {
+            st.settings.pinned_baseline_runner = st.settings.runner.clone();
+            st.settings.pinned_baseline_locked = true;
+            st.beats_baseline = false;
+            st.save_settings("Promoted winning runner to pinned baseline (+5% gate passed)");
+            crate::guardian::record_known_good_if_stable(999, Some(0));
+            redraw(hwnd);
+        }
+        Target::ApplyDoctorFix => {
+            if let Some(ref doc) = st.auto_doctor {
+                match doc.recommended_fix {
+                    Some(telemetry::DoctorFix::LowerTexRoom90) => {
+                        st.settings.texture_room_percent = "90".into();
+                        st.settings.card_room_for_targets_mb = "2048".into();
+                        st.save_settings("Auto-Doctor: capped VRAM room to 90% / 2048 MB");
+                    }
+                    Some(telemetry::DoctorFix::EnableMemTrim) => {
+                        st.save_settings("Auto-Doctor: idle memory trimming enabled");
+                    }
+                    Some(telemetry::DoctorFix::PrepareCache) => {
+                        handle_prepare(hwnd);
+                        return;
+                    }
+                    Some(telemetry::DoctorFix::SwitchBalanced1080p) => {
+                        let _ = crate::presets::apply_adaptive_preset(&mut st.settings, crate::presets::PresetKind::Balanced, &st.sys);
+                        st.save_settings("Auto-Doctor: switched to BALANCED 1080p");
+                    }
+                    None => {}
+                }
+                st.auto_doctor = None;
+                redraw(hwnd);
+            }
+        }
+        Target::CopyBenchmarkMd => {
+            if let Some(ref doc) = st.auto_doctor {
+                let md = doc.to_anonymized_markdown();
+                let _ = copy_to_clipboard(hwnd, &md);
+                st.set_toast("Copied anonymized benchmark Markdown to clipboard");
+                redraw(hwnd);
+            }
+        }
+        Target::KillRamHog(idx) => {
+            let apps = crate::diagnostics::probe_top_ram_apps();
+            if let Some((name, _)) = apps.get(idx) {
+                if crate::diagnostics::kill_process_by_name(name) {
+                    st.set_toast(format!("Closed {name}"));
+                    st.refresh_diagnostics(false);
+                } else {
+                    st.set_toast(format!("Skipped protected or already closed process: {name}"));
+                }
+                redraw(hwnd);
+            }
+        }
+        Target::BuildCustomRepo => {
+            if let Some(Some(repo_url)) = run_modal(hwnd, || {
+                prompt_text_input(
+                    "Build Runner from Git URL",
+                    "Enter GitHub URL or owner/repo (e.g. DoubleGhosty/cool_fox):",
+                    "DoubleGhosty/cool_fox",
+                )
+            }) {
+                let st = state(hwnd);
+                let name = repo_url.rsplit('/').next().unwrap_or("custom-runner").trim_end_matches(".git");
+                match crate::builder::launch_clone_and_build(&repo_url, name) {
+                    Ok(()) => st.set_toast("Launched local source builder terminal"),
+                    Err(e) => {
+                        show_msg(hwnd, &e, "Builder Error", MB_ICONERROR | MB_OK);
+                    }
+                }
+                redraw(hwnd);
+            }
+        }
+        Target::ExportPresetJson => {
+            let dst = crate::diagnostics::reports_dir().join(format!(
+                "preset-{}-{}.json",
+                st.settings.console_model,
+                st.settings.active_preset
+            ));
+            match st.settings.export_preset_json(&dst) {
+                Ok(()) => {
+                    st.set_toast("Exported path-free preset JSON to reports\\");
+                    open_path(hwnd, &dst);
+                }
+                Err(e) => {
+                    show_msg(hwnd, &e, "Export Preset", MB_ICONERROR | MB_OK);
+                }
+            }
+            redraw(hwnd);
+        }
+        Target::ImportPresetJson => {
+            if let Some(Some(p)) = run_modal(hwnd, || {
+                browse_file(hwnd, "Import Path-Free Preset JSON", &[("JSON Presets (*.json)", "*.json")], "")
+            }) {
+                let st = state(hwnd);
+                match st.settings.import_preset_json(std::path::Path::new(&p)) {
+                    Ok(()) => st.save_settings("Imported preset JSON cleanly"),
+                    Err(e) => {
+                        show_msg(hwnd, &e, "Import Preset", MB_ICONERROR | MB_OK);
+                    }
+                }
+                redraw(hwnd);
+            }
+        }
+        Target::OpenReleasesPage => {
+            if !st.settings.offline_mode {
+                open_path(hwnd, std::path::Path::new("https://github.com/game-master-6/game-master-6/releases"));
+            }
         }
         Target::OpenSessionsCsv => {
             let p = telemetry::sessions_csv_path();
@@ -1281,7 +1463,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         }
         Target::CycleAbExperiment => {
             let lbl = st.settings.cycle_ab_experiment();
-            st.save_settings(&format!("Live A/B {lbl}"));
+            st.save_settings(&format!("Live Baseline {lbl}"));
             redraw(hwnd);
         }
         Target::SafeBootRollback => {
@@ -1314,8 +1496,10 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
                 )
             }) {
                 let st = state(hwnd);
-                st.settings.custom_env = val;
-                st.save_settings("Custom environment variables saved");
+                let slug = runner_slug(&st.settings.resolved_runner(), st.settings.active_runner_kind());
+                st.settings.custom_env = val.clone();
+                st.settings.set_runner_env_for(&slug, &val);
+                st.save_settings("Per-runner environment variables saved");
                 redraw(hwnd);
             }
         }
@@ -1375,7 +1559,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
                     st.set_toast(format!("Screenshot saved: captures\\{}", cap.file_name().unwrap_or_default().to_string_lossy()));
                     if let Some(ref mut hud) = st.hud {
                         if st.settings.hud_overlay && st.session.is_some() {
-                            hud.update("GM6 · SCREENSHOT SAVED (captures\\)", rgb(34, 211, 138));
+                            hud.update("Title · SCREENSHOT SAVED (captures\\)", rgb(34, 211, 138));
                         }
                     }
                 }
@@ -1385,7 +1569,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         }
         Target::CreateDesktopShortcut => {
             let exe = std::env::current_exe().unwrap_or_else(|_| Settings::app_dir().join("Game Master.exe"));
-            let ico = Settings::resolve_asset("logo.ico");
+            let ico = Settings::app_dir().join("logo.ico");
             match create_desktop_shortcut(&exe, &ico) {
                 Ok(lnk) => {
                     st.set_toast("Desktop shortcut created!");
@@ -1548,9 +1732,9 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
                 }
             }
             st.save_settings(if st.settings.kbm_crosshair {
-                "Center reticle + auto menu cursor (Esc/Tab/F8) enabled"
+                "Standard center reticle + auto menu cursor (Esc/Tab/F8) enabled"
             } else {
-                "Center reticle disabled"
+                "Standard center reticle disabled"
             });
             redraw(hwnd);
         }
@@ -1726,6 +1910,29 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
                 redraw(hwnd);
             }
         }
+        Target::BenchmarkRun => {
+            if st.session.is_some() {
+                st.set_toast("A session is already running");
+            } else {
+                st.benchmark_restore_log = Some(st.settings.log_level.clone());
+                st.settings.log_level = "info".into();
+                handle_launch_or_stop(hwnd);
+                let st = state(hwnd);
+                if st.session.is_some() {
+                    st.set_toast("Benchmark Run started (VICTORY_LOG=info; restores warn on exit)");
+                } else {
+                    st.settings.log_level = st.benchmark_restore_log.take().unwrap_or_else(|| "warn".into());
+                }
+            }
+            redraw(hwnd);
+        }
+        Target::ToggleCompareLogs => {
+            st.show_log_compare = !st.show_log_compare;
+            if st.show_log_compare {
+                st.log_comparison = telemetry::compare_last_two_logs();
+            }
+            redraw(hwnd);
+        }
     }
 }
 
@@ -1772,6 +1979,7 @@ unsafe fn on_timer(hwnd: HWND) {
 
     if let Some(ref grx) = st.gpu_rx {
         if let Ok((gname, gdrv, vram)) = grx.try_recv() {
+            st.sys.gpu_arch = crate::diagnostics::GpuArch::detect(&gname);
             st.sys.gpu_name = gname;
             st.sys.gpu_driver = gdrv;
             st.sys.vram_gb = vram;
@@ -1804,6 +2012,25 @@ unsafe fn on_timer(hwnd: HWND) {
     if !paused_for_game && st.last_tip_probe.elapsed() >= Duration::from_secs(10) {
         st.start_tip_probe();
     }
+    if !paused_for_game && st.last_headroom_sample.elapsed() >= Duration::from_secs(2) {
+        st.last_headroom_sample = Instant::now();
+        let free_ram_pct = (100u32).saturating_sub(st.sys.mem_load_pct.min(100));
+        let com_gb = st.sys.avail_commit_gb.round().clamp(0.0, 100.0) as u32;
+        let vram_pct: u32 = st.settings.texture_room_percent.trim().parse().unwrap_or(90).clamp(0, 100);
+        for (vec, val) in [
+            (&mut st.free_ram_history, free_ram_pct),
+            (&mut st.avail_commit_history, com_gb),
+            (&mut st.vram_headroom_history, vram_pct),
+        ] {
+            vec.push(val);
+            if vec.len() > 60 {
+                vec.remove(0);
+            }
+        }
+        if st.view == 4 {
+            changed = true;
+        }
+    }
 
     if let Some(ref rx) = st.scan_rx {
         if let Ok((bytes, count)) = rx.try_recv() {
@@ -1827,7 +2054,7 @@ unsafe fn on_timer(hwnd: HWND) {
 
         let poll_res = if let Some(ref mut sess) = st.session {
             if sess.kind == launcher::ProcessKind::Game && (!sess.window_branded || st.anim_tick % 10 == 0) {
-                let ico = Settings::resolve_asset("logo.ico");
+                let ico = Settings::app_dir().join("logo.ico");
                 if brand_runner_window(sess.child.id(), "Game Master 6 - Title", &ico, true) {
                     sess.window_branded = true;
                 }
@@ -1884,7 +2111,7 @@ unsafe fn on_timer(hwnd: HWND) {
                     let secs = sess.started_at.elapsed().as_secs();
                     let ram_str = if ws_gb > 0.01 { format!("{ws_gb:.1}G") } else { "-".into() };
                     hud.update(
-                        &format!("GM6 · {} {:02}:{:02} · RAM {ram_str}", sess.kind.label(), secs / 60, secs % 60),
+                        &format!("Title · {} {:02}:{:02} · RAM {ram_str}", sess.kind.label(), secs / 60, secs % 60),
                         rgb(0, 240, 255),
                     );
                 }
@@ -1952,6 +2179,26 @@ unsafe fn on_timer(hwnd: HWND) {
                 let parsed_fps = telemetry::parse_fps_series(&st.log_lines);
                 if !parsed_fps.is_empty() {
                     st.fps_history = parsed_fps;
+                }
+                if st.benchmark_restore_log.take().is_some() {
+                    st.settings.log_level = "warn".into();
+                    let _ = st.settings.save();
+                }
+                st.log_comparison = telemetry::compare_last_two_logs();
+                let active_cache = cache_dir_for(
+                    &st.settings.resolved_runner(),
+                    st.settings.active_runner_kind(),
+                    st.settings.isolated_cache,
+                );
+                if fin.kind == ProcessKind::Prepare && fin.exit_code == Some(0) {
+                    crate::runners::write_cache_hash(&st.settings.resolved_runner(), &active_cache);
+                    st.cache_hash_mismatch = false;
+                } else if fin.kind == ProcessKind::Game {
+                    let crashed = fin.exit_code.unwrap_or(0) != 0;
+                    let doc = telemetry::analyze_session_log(&rname, &fin.log_path, &st.sys, crashed);
+                    let base_fps = st.runner_benches.first().map(|b| b.avg_fps).unwrap_or(0.0);
+                    st.beats_baseline = telemetry::benchmark_beats_baseline(doc.avg_fps, base_fps, crashed);
+                    st.auto_doctor = Some(doc);
                 }
                 let (p_secs, p_cnt) = telemetry::total_playtime_summary();
                 st.playtime_label = format!("PLAYTIME {} ({} RUNS)", telemetry::format_playtime(p_secs), p_cnt);
@@ -2042,7 +2289,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
             let fonts = Fonts::load(&dir);
 
             // Load multi-size icon via native LoadImageW
-            let ico_path = wide(&Settings::resolve_asset("logo.ico").to_string_lossy());
+            let ico_path = wide(&dir.join("logo.ico").to_string_lossy());
             let big_ico = LoadImageW(std::ptr::null_mut(), ico_path.as_ptr(), IMAGE_ICON, 48, 48, LR_LOADFROMFILE);
             let sm_ico = LoadImageW(std::ptr::null_mut(), ico_path.as_ptr(), IMAGE_ICON, 16, 16, LR_LOADFROMFILE);
             if !big_ico.is_null() {
@@ -2125,7 +2372,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 runner_benches: Vec::new(),
                 mods: saves::list_mods(8),
                 listening_keybind: None,
-                shader_census: ShaderCensus { translated: 0, total: 0, refused: 0, summary: "Shader translator active. Click RUN CENSUS to scan the local shader archive.".into() },
+                shader_census: ShaderCensus { translated: 0, total: 0, refused: 0, summary: "Baseline translator active. Click RUN CENSUS to scan the local shader archive.".into() },
                 census_rx: None,
                 last_crash: None,
                 dismissed_warning: None,
@@ -2135,7 +2382,26 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 last_tip_probe: Instant::now(),
                 is_first_run: !Settings::path().is_file(),
                 modal_open: false,
+                benchmark_restore_log: None,
+                log_comparison: telemetry::compare_last_two_logs(),
+                show_log_compare: false,
+                free_ram_history: vec![100u32.saturating_sub(init_ram); 2],
+                avail_commit_history: vec![init_commit; 2],
+                vram_headroom_history: vec![90; 2],
+                last_headroom_sample: Instant::now(),
+                adv_filter: "ALL",
+                auto_doctor: None,
+                cache_hash_mismatch: false,
+                beats_baseline: false,
             });
+            st.cache_hash_mismatch = crate::runners::check_cache_hash_mismatch(
+                &st.settings.resolved_runner(),
+                &cache_dir_for(
+                    &st.settings.resolved_runner(),
+                    st.settings.active_runner_kind(),
+                    st.settings.isolated_cache,
+                ),
+            ).is_some();
             st.slow_shaders = extract_slow_shaders(&st.log_lines, 6);
             st.sync_telemetry_and_census(true);
             st.start_tip_probe();
@@ -2145,6 +2411,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
             st.start_size_scan();
 
             SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(st) as isize);
+            DragAcceptFiles(hwnd, 1);
             enable_dark_titlebar(hwnd);
             RegisterHotKey(hwnd, 901, MOD_NOREPEAT, VK_F9);
             RegisterHotKey(hwnd, 902, MOD_NOREPEAT, VK_F10);
@@ -2173,7 +2440,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
 
             let st = state(hwnd);
             if st.logo.is_none() {
-                st.logo = LogoSurface::load(hdc, &Settings::resolve_asset("logo.bmp"));
+                st.logo = LogoSurface::load(hdc, &Settings::app_dir().join("logo.bmp"));
             }
 
             let mem = CreateCompatibleDC(hdc);
@@ -2225,6 +2492,15 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 dismissed_warning: st.dismissed_warning.as_deref(),
                 adv_collapsed: st.adv_collapsed,
                 system_tip: &st.system_tip,
+                log_comparison: st.log_comparison.as_ref(),
+                show_log_compare: st.show_log_compare,
+                free_ram_history: &st.free_ram_history,
+                avail_commit_history: &st.avail_commit_history,
+                vram_headroom_history: &st.vram_headroom_history,
+                adv_filter: st.adv_filter,
+                auto_doctor: st.auto_doctor.as_ref(),
+                cache_hash_mismatch: st.cache_hash_mismatch,
+                beats_baseline: st.beats_baseline,
             };
             st.hits = paint(mem, w, h, &ctx);
 
@@ -2402,6 +2678,39 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
             DestroyWindow(hwnd);
             0
         }
+        WM_DROPFILES => {
+            let paths = read_dropped_paths(wparam as HDROP);
+            let st = state(hwnd);
+            for p_str in paths {
+                let p = PathBuf::from(&p_str);
+                if p.is_dir() {
+                    let v = p.join("victory.exe");
+                    if v.is_file() {
+                        st.settings.runner = v.to_string_lossy().into_owned();
+                        st.save_settings("Runner set via drag-and-drop");
+                    } else {
+                        st.settings.game_dir = p_str;
+                        st.save_settings("Game folder set via drag-and-drop");
+                        st.start_size_scan();
+                    }
+                } else if p.is_file() && p.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("exe")) {
+                    let fname = p.file_name().and_then(|n| n.to_str()).unwrap_or("").to_ascii_lowercase();
+                    if fname.contains("victory") {
+                        st.settings.runner = p_str;
+                        st.save_settings("Runner set via drag-and-drop");
+                    } else {
+                        st.settings.exe = p_str;
+                        if let Some(par) = p.parent() {
+                            st.settings.game_dir = par.to_string_lossy().into_owned();
+                        }
+                        st.save_settings("Game executable set via drag-and-drop");
+                        st.start_size_scan();
+                    }
+                }
+            }
+            redraw(hwnd);
+            0
+        }
         WM_DESTROY => {
             UnregisterHotKey(hwnd, 901);
             UnregisterHotKey(hwnd, 902);
@@ -2412,6 +2721,18 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
             let ptr = state_ptr(hwnd);
             if !ptr.is_null() {
                 let mut st = Box::from_raw(ptr);
+                let mut rc = RECT::default();
+                if IsIconic(hwnd) == 0 && GetWindowRect(hwnd, &mut rc) != 0 {
+                    let w = rc.right - rc.left;
+                    let h = rc.bottom - rc.top;
+                    if w >= MIN_W && h >= MIN_H {
+                        st.settings.win_x = rc.left;
+                        st.settings.win_y = rc.top;
+                        st.settings.win_w = w;
+                        st.settings.win_h = h;
+                        let _ = st.settings.save();
+                    }
+                }
                 if let Some(ref mut sess) = st.session {
                     launcher::stop(sess);
                 }
@@ -2436,7 +2757,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
 
 pub fn run() {
     std::panic::set_hook(Box::new(|info| {
-        let text = format!("Game Master 6 error:\n\n{info}");
+        let text = format!("Game Master v1.2 error:\n\n{info}");
         let dir = Settings::app_dir().join("logs");
         let _ = std::fs::create_dir_all(&dir);
         let _ = std::fs::write(dir.join("crash.txt"), &text);
@@ -2460,7 +2781,7 @@ pub fn run() {
         }
 
         let class = wide("GameMasterViceV2Class");
-        let title = wide("Game Master 6 v1.0");
+        let title = wide("Game Master 6 v1.2");
         let hinst = GetModuleHandleW(std::ptr::null());
         let wc = WNDCLASSEXW {
             cb_size: std::mem::size_of::<WNDCLASSEXW>() as UINT,
@@ -2478,15 +2799,18 @@ pub fn run() {
         };
         RegisterClassExW(&wc);
 
+        let saved_s = Settings::load();
         let style = WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN;
         let sx = GetSystemMetrics(SM_CXSCREEN);
         let sy = GetSystemMetrics(SM_CYSCREEN);
-        let mut wr = RECT::new(0, 0, DEFAULT_W.min((sx - 60).max(MIN_W)), DEFAULT_H.min((sy - 80).max(MIN_H)));
+        let req_w = if saved_s.win_w >= MIN_W { saved_s.win_w } else { DEFAULT_W };
+        let req_h = if saved_s.win_h >= MIN_H { saved_s.win_h } else { DEFAULT_H };
+        let mut wr = RECT::new(0, 0, req_w.min((sx - 60).max(MIN_W)), req_h.min((sy - 80).max(MIN_H)));
         AdjustWindowRectEx(&mut wr, style, 0, 0);
         let win_w = wr.width().min(sx.max(800));
         let win_h = wr.height().min(sy.max(600));
-        let x = ((sx - win_w) / 2).max(16);
-        let y = ((sy - win_h) / 2).max(16);
+        let x = if saved_s.win_x >= 0 && saved_s.win_x + 120 < sx { saved_s.win_x } else { ((sx - win_w) / 2).max(16) };
+        let y = if saved_s.win_y >= 0 && saved_s.win_y + 120 < sy { saved_s.win_y } else { ((sy - win_h) / 2).max(16) };
 
         let hwnd = CreateWindowExW(
             0,
@@ -2592,7 +2916,7 @@ unsafe fn dump_ui_tabs(out_dir: &std::path::Path) {
         return;
     }
     let old = SelectObject(mem, bmp);
-    let logo = LogoSurface::load(mem, &Settings::resolve_asset("logo.bmp"));
+    let logo = LogoSurface::load(mem, &Settings::app_dir().join("logo.bmp"));
     let portwatch = PortWatchSnapshot::default();
     let mods = saves::list_mods(8);
     let slow_shaders = Vec::new();
@@ -2649,6 +2973,15 @@ unsafe fn dump_ui_tabs(out_dir: &std::path::Path) {
             dismissed_warning: None,
             adv_collapsed: [false, false, false, false, true],
             system_tip: &(false, String::new()),
+            log_comparison: None,
+            show_log_compare: false,
+            free_ram_history: &ram_history,
+            avail_commit_history: &commit_history,
+            vram_headroom_history: &[90, 90],
+            adv_filter: "ALL",
+            auto_doctor: None,
+            cache_hash_mismatch: false,
+            beats_baseline: false,
         };
         let _ = paint(mem, w, h, &ctx);
         let px_bytes = (w as usize) * (h as usize) * 4;

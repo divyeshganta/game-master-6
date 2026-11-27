@@ -1,4 +1,4 @@
-//! Universal Pre-Flight System Readiness Scorer (v1.0)
+//! Universal Pre-Flight System Readiness Scorer (v1.2)
 //! Evaluates GPU VRAM tier, active commit/pagefile mount status, TDR safety,
 //! display VRAM overhead, shader cache readiness, and CPU capabilities.
 
@@ -22,7 +22,7 @@ pub fn evaluate(s: &Settings, sys: &SystemInfo, audit: &AssetAudit) -> PreFlight
     let mut issues: Vec<String> = Vec::new();
     let mut checks: Vec<(bool, String)> = Vec::new();
 
-    // 1. CPU AVX2 (required by compatibility runner)
+    // 1. CPU AVX2 (required by VIctory/Baseline)
     if !sys.avx2 {
         score -= 40;
         let msg = "CPU lacks AVX2 support".to_string();

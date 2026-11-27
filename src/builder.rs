@@ -11,9 +11,18 @@ pub fn runners_src_dir() -> PathBuf {
     dir
 }
 
-/// Validates a strict `owner/repo` GitHub slug to prevent shell or URL injection.
+/// Validates a strict `owner/repo` GitHub slug (or full `https://github.com/owner/repo[.git]` URL).
 pub fn validate_github_repo(repo: &str) -> Result<(String, String), String> {
-    let clean = repo.trim().trim_matches('/');
+    let mut clean = repo.trim().trim_matches('/');
+    if let Some(rest) = clean.strip_prefix("https://github.com/") {
+        clean = rest;
+    } else if let Some(rest) = clean.strip_prefix("http://github.com/") {
+        clean = rest;
+    }
+    if let Some(rest) = clean.strip_suffix(".git") {
+        clean = rest;
+    }
+    clean = clean.trim_matches('/');
     let parts: Vec<&str> = clean.split('/').collect();
     if parts.len() != 2 {
         return Err(format!("Invalid GitHub repository format: '{repo}'"));
@@ -63,7 +72,7 @@ pub fn launch_clone_and_build(repo: &str, name: &str) -> Result<(), String> {
     let ps_script = format!(
         "$ErrorActionPreference = 'Stop'\n\
          Write-Host '============================================================' -ForegroundColor Cyan\n\
-         Write-Host '  Game Master 6 v1.0 — Safe Auto-Builder ({safe_name})' -ForegroundColor Magenta\n\
+         Write-Host '  Game Master 6 v1.2 — Safe Auto-Builder ({safe_name})' -ForegroundColor Magenta\n\
          Write-Host '  Repo: {clone_url}' -ForegroundColor Gray\n\
          Write-Host '============================================================' -ForegroundColor Cyan\n\
          $repoDir = '{repo_dir}'\n\
@@ -214,7 +223,7 @@ pub static D3D12SDKPath: &[u8; 9] = &[0x2E, 0x5C, 0x44, 0x33, 0x44, 0x31, 0x32, 
         .args([
             "/C",
             "start",
-            "Game Master 6 v1.0 Safe Auto-Builder",
+            "Game Master v1.2 Safe Auto-Builder",
             "powershell",
             "-NoProfile",
             "-ExecutionPolicy",

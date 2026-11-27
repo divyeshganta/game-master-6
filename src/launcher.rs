@@ -17,7 +17,7 @@ fn is_ztrx_runner(path: &Path) -> bool {
         .any(|c| c.as_os_str().to_string_lossy().eq_ignore_ascii_case("ztrx"))
 }
 
-/// Builds the exact, deduplicated list of verified runner environment variables
+/// Builds the exact, deduplicated list of verified Baseline environment variables
 /// directly from `Settings` (zero hardcoded bypasses, zero stale/dead flags).
 pub fn build_runner_env(s: &Settings) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
@@ -156,7 +156,7 @@ pub fn build_runner_env(s: &Settings) -> Vec<(String, String)> {
         set("VICTORY_AB", ab_val.to_string());
     }
 
-    // Verified Port 6/7 + idle memory-trimming flags (VICTORY_PORT_CONSTANTS / VICTORY_PORT_CBV stay OFF by default)
+    // Verified overnight cool_fox Port 6/7 & memory-trimming wins
     set("VICTORY_PORT_GUARD", "1".into());
     set("VICTORY_PORT_JOURNAL", "1".into());
     set("VICTORY_LIST_IDLE_TRIM_S", "5".into());
@@ -283,7 +283,7 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
     };
 
     let header = format!(
-        "=== Game Master 6 v1.0 session ({})\n\
+        "=== Game Master 6 v1.2 session ({})\n\
          exe              : {}\n\
          game_dir         : {}\n\
          runner           : {}\n\
@@ -369,18 +369,44 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
             cmd.env("VICTORY_SHADER_LOOP_LIMIT", s.shader_loop_limit.trim());
         }
         cmd.env("VICTORY_WINDOW_TITLE", "Game Master 6 - Title")
-            .env("VICTORY_WINDOW_ICON", Settings::resolve_asset("logo.ico"));
+            .env("VICTORY_WINDOW_ICON", Settings::app_dir().join("logo.ico"));
+    } else if kind == crate::runners::RunnerKind::Xcl {
+        // Dedicated XCL compatibility layer env/arg mapping (without forcing Victory-only flags)
+        cmd.current_dir(&s.game_dir)
+            .arg("--execute")
+            .arg(&s.exe);
+        for arg in extra_args {
+            cmd.arg(arg);
+        }
+        cmd.env("XCL_GAME_DIR", &s.game_dir)
+            .env("XCL_LOG", victory_log);
+        let shaders_dir = Path::new(&s.game_dir).join("shaders");
+        if shaders_dir.is_dir() {
+            cmd.env("XCL_SHADER_DIR", &shaders_dir);
+        }
+        if !matches!(s.display_mode.trim(), "auto" | "") {
+            cmd.env("XCL_DISPLAY_MODE", s.display_mode.trim());
+        }
     } else {
-        // Universal adapter for custom compatibility runners and forks
+        // Xbox2Windows / Generic runner: pass executable, args, and custom overrides without Victory-only flags
         cmd.current_dir(&s.game_dir).arg(&s.exe);
         for arg in extra_args {
             cmd.arg(arg);
         }
-        cmd.env("VICTORY_GAME_DIR", &s.game_dir)
-            .env("XCL_GAME_DIR", &s.game_dir);
     }
 
-    // Future-proof custom environment overrides (KEY=VAL;KEY2=VAL2)
+    // Per-runner custom overrides + global custom_env (KEY=VAL;KEY2=VAL2)
+    let runner_id = crate::runners::runner_slug(&runner_path, kind);
+    if let Some(ov) = s.runner_env_for(&runner_id) {
+        for pair in ov.split(';') {
+            if let Some((k, v)) = pair.split_once('=') {
+                let k = k.trim();
+                if !k.is_empty() {
+                    cmd.env(k, v.trim());
+                }
+            }
+        }
+    }
     for pair in s.custom_env.split(';') {
         if let Some((k, v)) = pair.split_once('=') {
             let k = k.trim();
@@ -468,8 +494,9 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
 
     let runner_path = s.resolved_runner();
     let ztrx = is_ztrx_runner(&runner_path);
-    let is_baseline = runner_path.to_string_lossy().to_ascii_lowercase().contains("baseline");
-    let use_cache_flag = !ztrx && !is_baseline;
+    let lower_runner = runner_path.to_string_lossy().to_ascii_lowercase();
+    let baseline = lower_runner.contains("baseline") || lower_runner.contains("overnight-tuned");
+    let use_cache_flag = !ztrx && !baseline;
     let flags_desc = if !use_cache_flag {
         format!("translate --pipelines --jobs {jobs}")
     } else {
@@ -477,7 +504,7 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
     };
 
     let header = format!(
-        "=== Game Master 6 v1.0 shader preparation ({})\n\
+        "=== Game Master 6 v1.2 shader preparation ({})\n\
          runner   : {}\n\
          cmd      : {}\n\
          shaders  : {}\n\

@@ -1,5 +1,5 @@
-//! Native Live A/B Benchmark Controller (v1.0)
-//! Hooks directly into the runner's built-in `VICTORY_AB=<seconds>,<switch>` engine
+//! Native Baseline Live A/B Benchmark Controller (v1.2)
+//! Hooks directly into Baseline's built-in `VICTORY_AB=<seconds>,<switch>` engine
 //! (verified in `crates\victory-gpu\src\ab.rs:26`) to scientifically measure whether
 //! a specific optimization switch gains or loses FPS in the EXACT same live scene.
 

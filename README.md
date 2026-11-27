@@ -9,7 +9,7 @@
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-00e5ff?style=for-the-badge&logo=windows)](https://github.com)
 [![Built with](https://img.shields.io/badge/Built%20with-Rust%20%2B%20Win32%20GDI-ff2e93?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-GPL--3.0-22c55e?style=for-the-badge)](LICENSE)
-[![Latest Release](https://img.shields.io/badge/Release-v1.0-f59e0b?style=for-the-badge)](GameMaster6-v1.0-Release.zip)
+[![Latest Release](https://img.shields.io/badge/Release-v1.2-f59e0b?style=for-the-badge)](GameMaster6-v1.2-Release.zip)
 
 </div>
 

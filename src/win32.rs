@@ -624,7 +624,18 @@ extern "system" {
     pub fn RestoreDC(hdc: HDC, saved: c_int) -> BOOL;
     pub fn IntersectClipRect(hdc: HDC, left: c_int, top: c_int, right: c_int, bottom: c_int) -> c_int;
     pub fn GetDIBits(hdc: HDC, hbm: HBITMAP, start: UINT, c_lines: UINT, lpv_bits: *mut c_void, lpbmi: *mut BITMAPINFO, usage: UINT) -> c_int;
+    pub fn GetTextExtentPoint32W(hdc: HDC, lp_string: *const u16, c: c_int, psizl: *mut SIZE) -> BOOL;
 }
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct SIZE {
+    pub cx: c_int,
+    pub cy: c_int,
+}
+
+pub const WM_DROPFILES: UINT = 0x0233;
+pub type HDROP = *mut c_void;
 
 #[link(name = "msimg32")]
 extern "system" {
@@ -668,6 +679,45 @@ extern "system" {
         lp_directory: *const u16,
         n_show_cmd: c_int,
     ) -> *mut c_void;
+    pub fn DragAcceptFiles(hwnd: HWND, f_accept: BOOL);
+    pub fn DragQueryFileW(h_drop: HDROP, i_file: UINT, lpsz_file: *mut u16, cch: UINT) -> UINT;
+    pub fn DragFinish(h_drop: HDROP);
+}
+
+/// Measures the rendered pixel width of `text` using `GetTextExtentPoint32W`.
+pub unsafe fn measure_text_w(hdc: HDC, text: &str, font: HGDIOBJ) -> i32 {
+    let w = wide(text);
+    let len = w.len().saturating_sub(1) as c_int;
+    if len <= 0 {
+        return 0;
+    }
+    let old = SelectObject(hdc, font);
+    let mut sz = SIZE::default();
+    let ok = GetTextExtentPoint32W(hdc, w.as_ptr(), len, &mut sz);
+    SelectObject(hdc, old);
+    if ok != 0 { sz.cx } else { 0 }
+}
+
+/// Extracts all dropped file/folder paths from a `WM_DROPFILES` `HDROP` handle.
+pub unsafe fn read_dropped_paths(hdrop: HDROP) -> Vec<String> {
+    let count = DragQueryFileW(hdrop, 0xFFFF_FFFF, std::ptr::null_mut(), 0);
+    let mut out = Vec::with_capacity(count as usize);
+    for i in 0..count {
+        let needed = DragQueryFileW(hdrop, i, std::ptr::null_mut(), 0);
+        if needed == 0 {
+            continue;
+        }
+        let mut buf = vec![0u16; (needed + 1) as usize];
+        let got = DragQueryFileW(hdrop, i, buf.as_mut_ptr(), buf.len() as UINT);
+        if got > 0 {
+            let s = String::from_utf16_lossy(&buf[..got as usize]);
+            if !s.trim().is_empty() {
+                out.push(s);
+            }
+        }
+    }
+    DragFinish(hdrop);
+    out
 }
 
 #[link(name = "ole32")]
@@ -898,7 +948,7 @@ extern "system" {
 
 /// Fetches a UTF-8 text payload over HTTPS/HTTP using native Windows WinINet (zero external crates).
 pub unsafe fn http_get_text(url: &str, max_bytes: usize) -> Result<String, String> {
-    let agent = wide("GameMaster6/1.0");
+    let agent = wide("GM6-GameMaster/15.2");
     let h_inet = InternetOpenW(
         agent.as_ptr(),
         INTERNET_OPEN_TYPE_PRECONFIG,
@@ -1544,7 +1594,7 @@ pub unsafe fn make_runner_window_borderless_fullscreen(pid: u32) -> bool {
 }
 
 /// Automatically finds the active runner's top-level window (by PID) and brands it with
-/// "Game Master 6 - Title" and Game Master 6's `logo.ico` icon.
+/// "Game Master 6 - Title" and Game Master's `logo.ico` icon.
 pub unsafe fn brand_runner_window(pid: u32, title_text: &str, icon_path: &Path, clean_caption: bool) -> bool {
     struct Ctx {
         pid: u32,
@@ -1584,7 +1634,7 @@ pub unsafe fn brand_runner_window(pid: u32, title_text: &str, icon_path: &Path, 
     true
 }
 
-/// Returns the window rect of the foreground runner window (if focused).
+/// Returns the window rect of the foreground Title game window (if focused).
 pub unsafe fn foreground_game_rect() -> Option<RECT> {
     let fg = GetForegroundWindow();
     if fg.is_null() {
@@ -1600,7 +1650,7 @@ pub unsafe fn foreground_game_rect() -> Option<RECT> {
     if lower.contains("game master") {
         return None;
     }
-    if !lower.contains("victory") {
+    if !(lower.contains("game master 6") || lower.contains("title") || lower.contains("victory")) {
         return None;
     }
     let mut rc = RECT::new(0, 0, 0, 0);
