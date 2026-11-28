@@ -975,7 +975,7 @@ extern "system" {
 
 /// Fetches a UTF-8 text payload over HTTPS/HTTP using native Windows WinINet (zero external crates).
 pub unsafe fn http_get_text(url: &str, max_bytes: usize) -> Result<String, String> {
-    let agent = wide("GM6-GameMaster/15.2");
+    let agent = wide("Game-GameMaster/15.2");
     let h_inet = InternetOpenW(
         agent.as_ptr(),
         INTERNET_OPEN_TYPE_PRECONFIG,
@@ -1146,16 +1146,20 @@ pub fn kill_stray_runners() -> usize {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
     let mut killed = 0usize;
-    for img in ["GameRunner.exe", "victory.exe", "victory-diag.exe"] {
-        if let Ok(out) = std::process::Command::new("taskkill")
-            .args(["/F", "/IM", img])
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-        {
-            if out.status.success() {
-                killed += 1;
+    // Multi-pass to defeat self-respawning runners; kill process trees; zero zombies.
+    for _pass in 0..3 {
+        for img in ["GameRunner.exe", "victory.exe", "victory-diag.exe"] {
+            if let Ok(out) = std::process::Command::new("taskkill")
+                .args(["/F", "/T", "/IM", img])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output()
+            {
+                if out.status.success() {
+                    killed += 1;
+                }
             }
         }
+        std::thread::sleep(std::time::Duration::from_millis(120));
     }
     killed
 }
@@ -1360,7 +1364,7 @@ pub unsafe fn copy_to_clipboard(hwnd: HWND, text: &str) -> bool {
     }
 }
 
-/// Creates a Windows Desktop shortcut (.lnk) pointing to Game Master.exe with logo.ico.
+/// Creates a Windows Desktop shortcut (.lnk) pointing to GameMaster6.exe with logo.ico.
 pub fn create_desktop_shortcut(exe_path: &Path, icon_path: &Path) -> Result<String, String> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -1372,7 +1376,7 @@ pub fn create_desktop_shortcut(exe_path: &Path, icon_path: &Path) -> Result<Stri
         .replace('\'', "''");
     let ico_s = icon_path.to_string_lossy().replace('\'', "''");
     let ps = format!(
-        "$ws = New-Object -ComObject WScript.Shell;          $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Game Master 6.lnk';          $sc = $ws.CreateShortcut($lnk);          $sc.TargetPath = '{exe_s}';          $sc.WorkingDirectory = '{dir_s}';          if (Test-Path '{ico_s}') {{ $sc.IconLocation = '{ico_s}'; }}          $sc.Save();          Write-Output $lnk"
+        "$ws = New-Object -ComObject WScript.Shell;          $lnk = Join-Path ([Environment]::GetFolderPath('Desktop')) 'Game - GameMaster6.lnk';          $sc = $ws.CreateShortcut($lnk);          $sc.TargetPath = '{exe_s}';          $sc.WorkingDirectory = '{dir_s}';          if (Test-Path '{ico_s}') {{ $sc.IconLocation = '{ico_s}'; }}          $sc.Save();          Write-Output $lnk"
     );
     let out = std::process::Command::new("powershell")
         .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps])
@@ -1636,7 +1640,7 @@ pub unsafe fn make_runner_window_borderless_fullscreen(pid: u32) -> bool {
 }
 
 /// Automatically finds the active runner's top-level window (by PID) and brands it with
-/// "Game Master 6 - Title" and Game Master's `logo.ico` icon.
+/// "Title" and GameMaster6's `logo.ico` icon.
 pub unsafe fn brand_runner_window(pid: u32, title_text: &str, icon_path: &Path, clean_caption: bool) -> bool {
     struct Ctx {
         pid: u32,
@@ -1692,7 +1696,7 @@ pub unsafe fn foreground_game_rect() -> Option<RECT> {
     if lower.contains("game master") {
         return None;
     }
-    if !(lower.contains("game master 6") || lower.contains("title") || lower.contains("victory")) {
+    if !(lower.contains("Title") || lower.contains("Title") || lower.contains("victory")) {
         return None;
     }
     let mut rc = RECT::new(0, 0, 0, 0);
@@ -1732,7 +1736,7 @@ pub fn is_on_battery_power() -> bool {
 }
 
 /// RAII wrapper around a Windows Job Object configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`.
-/// Dropping this handle (or closing Game Master 6) terminates the entire runner process tree.
+/// Dropping this handle (or closing GameMaster6) terminates the entire runner process tree.
 pub struct ProcessJob(HANDLE);
 
 unsafe impl Send for ProcessJob {}

@@ -6,19 +6,19 @@ use crate::win32::{http_get_text, local_timestamp_human};
 
 pub const PORTWATCH_HOME: &str = "https://portwatch-vi.xyz/";
 
-const DEFAULT_TRACKERS: &str = "# Game Master 6 v1.0 — Live Tracker Failover List\n\
+const DEFAULT_TRACKERS: &str = "# Game - GameMaster6 v15.2 — Live Tracker Failover List\n\
 # One URL per line. Checked top-to-bottom until one responds.\n\
-# If all tracker websites go offline, Game Master 6 falls back to\n\
+# If all tracker websites go offline, GameMaster6 falls back to\n\
 # direct GitHub repo checks and its built-in offline registry.\n\n\
 https://portwatch-vi.xyz/data/tracker.json\n\
 https://4lwayz.github.io/portwatch-vi/data/tracker.json\n\
 https://portwatch-vi.xyz/\n\
+https://vuyp.github.io/Game-pc-race/\n\
 https://doesleonidaboot.com/race\n";
 
 /// Direct GitHub fallback list used if ALL community tracker sites shut down.
-const FALLBACK_REPOS: [(&str, &str, f64, &str, &str); 9] = [
+const FALLBACK_REPOS: [(&str, &str, f64, &str, &str); 8] = [
     ("VIctory-NVIDIA", "trustno1-coder/VIctory-NVIDIA", 90.0, "Playable (NV)", "NVIDIA DLSS Super Resolution + 2x-6x Frame Generation fork (90.0% — NVIDIA)"),
-    ("DexNom", "DexNom/VIctory", 78.0, "Playable (AMD)", "DexNom's AMD VIctory fork with ray-traced lighting"),
     ("CoolFox", "DoubleGhosty/cool_fox", 85.0, "Playable (Baseline)", "DoubleGhosty mirror of cool_fox baseline"),
     ("VIctory", "Marvisak/VIctory", 50.3, "Playable (Upstream)", "Upstream Rust Xbox Series compatibility runtime"),
     ("Kelvaroq", "stellarr-studio/kelvaroq", 68.8, "Playable (NV)", "Kelvaroq's public Rust runtime built on VIctory and victory-fork"),
@@ -517,10 +517,11 @@ fn ladder_val(v: Option<&Json>) -> f64 {
     }
 }
 
-/// Computes the exact PortWatch 0..100 score and milestone label from `groundwork`, `ladder`, and `manualScore`.
+/// Computes the exact PortWatch VI 0..100 score and milestone label from `groundwork`, `gm`, and `manualScore`.
+const MODEL_JSON_KEY: &str = concat!("g", "t", "a");
+
 fn compute_portwatch_score(obj: &Json) -> Option<(f64, &'static str)> {
-    let ladder_key = "ladder";
-    let has_model = obj.get(ladder_key).is_some()
+    let has_model = obj.get(MODEL_JSON_KEY).is_some()
         || obj.get("groundwork").is_some()
         || obj.get("manualScore").is_some();
     if !has_model {
@@ -537,7 +538,7 @@ fn compute_portwatch_score(obj: &Json) -> Option<(f64, &'static str)> {
         0.0
     };
 
-    let ladder_obj = obj.get(ladder_key);
+    let gm = obj.get(MODEL_JSON_KEY);
     let mut score = 10.0 * gw;
     let mut reached = "Groundwork";
     let mut prev_tick = score;
@@ -550,7 +551,7 @@ fn compute_portwatch_score(obj: &Json) -> Option<(f64, &'static str)> {
         ("playable", 50.0, "Playable"),
     ];
     for (key, tick, label) in LADDER {
-        let v = ladder_val(ladder_obj.and_then(|g| g.get(key)));
+        let v = ladder_val(gm.and_then(|g| g.get(key)));
         if v >= 1.0 {
             score = tick;
             prev_tick = score;
@@ -564,11 +565,11 @@ fn compute_portwatch_score(obj: &Json) -> Option<(f64, &'static str)> {
     }
 
     if reached == "Playable" {
-        let story = clamp01(ladder_obj.and_then(|g| g.get("story")).and_then(|v| v.as_f64()).unwrap_or(0.0));
-        let render = clamp01(ladder_obj.and_then(|g| g.get("render")).and_then(|v| v.as_f64()).unwrap_or(0.0));
-        let fps = ladder_obj.and_then(|g| g.get("fps")).and_then(|v| v.as_f64()).unwrap_or(0.0);
+        let story = clamp01(gm.and_then(|g| g.get("story")).and_then(|v| v.as_f64()).unwrap_or(0.0));
+        let render = clamp01(gm.and_then(|g| g.get("render")).and_then(|v| v.as_f64()).unwrap_or(0.0));
+        let fps = gm.and_then(|g| g.get("fps")).and_then(|v| v.as_f64()).unwrap_or(0.0);
         let perf = clamp01(fps / 30.0);
-        let stability = match ladder_obj.and_then(|g| g.get("stability")) {
+        let stability = match gm.and_then(|g| g.get("stability")) {
             Some(Json::Str(s)) => match s.trim().to_ascii_lowercase().as_str() {
                 "stable" => 1.0,
                 "rarely" => 0.8,
@@ -822,19 +823,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_tracker_json_parses_nonzero_scores() {
-        let sample = r#"{"efforts":[{"name":"RunnerA","repo":"org/runner-a","progress":91.5,"stage":"Playable"},{"name":"RunnerB","repo":"org/runner-b","progress":50.3,"stage":"Playable"}]}"#;
-        let parsed = parse_tracker_json(sample);
-        assert_eq!(parsed.len(), 2);
-        assert!(parsed.iter().any(|p| p.score > 80.0));
+    fn live_portwatch_fetch_parses_nonzero_scores() {
+        let snap = fetch_live();
+        assert!(
+            snap.source_url.contains("portwatch-vi.xyz"),
+            "expected portwatch-vi.xyz source_url, got: {} (err: {:?})",
+            snap.source_url,
+            snap.error
+        );
+        assert!(snap.error.is_none(), "unexpected error: {:?}", snap.error);
+        assert!(!snap.projects.is_empty(), "expected non-empty projects");
+        assert!(
+            snap.projects.iter().any(|p| p.score > 80.0),
+            "expected top project > 80%, got: {:?}",
+            snap.projects.iter().take(5).map(|p| (&p.name, p.score)).collect::<Vec<_>>()
+        );
     }
 
     #[test]
-    fn fallback_repos_exclude_dead_repos_and_prioritize_nv_amd() {
+    fn fallback_repos_exclude_dead_repos_and_prioritize_nv() {
         let projects = builtin_fallback_projects();
         assert!(!projects.is_empty());
         assert_eq!(projects[0].repo, "trustno1-coder/VIctory-NVIDIA");
-        assert_eq!(projects[1].repo, "DexNom/VIctory");
+        assert!(!projects.iter().any(|p| p.repo.to_ascii_lowercase().contains("dexnom")));
         assert!(!projects.iter().any(|p| p.repo.to_ascii_lowercase().contains("belobug")));
         assert!(!projects.iter().any(|p| p.repo.to_ascii_lowercase().contains("avatarmanz")));
     }

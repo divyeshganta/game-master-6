@@ -18,9 +18,9 @@ fn is_ztrx_runner(path: &Path) -> bool {
         .any(|c| c.as_os_str().to_string_lossy().eq_ignore_ascii_case("ztrx"))
 }
 
-/// Builds the exact, deduplicated list of verified BASELINE environment variables
+/// Builds the exact, deduplicated list of verified victory environment variables
 /// directly from `Settings` (zero hardcoded bypasses, zero stale/dead flags).
-pub fn build_runner_env(s: &Settings) -> Vec<(String, String)> {
+pub fn build_victory_env(s: &Settings) -> Vec<(String, String)> {
     let mut out: Vec<(String, String)> = Vec::new();
     let mut set = |k: &str, v: String| {
         if let Some(existing) = out.iter_mut().find(|(ek, _)| ek == k) {
@@ -59,9 +59,7 @@ pub fn build_runner_env(s: &Settings) -> Vec<(String, String)> {
     if !s.texture_room_percent.trim().is_empty() {
         set("VICTORY_TEXTURE_ROOM_PERCENT", s.texture_room_percent.trim().to_string());
     }
-    if !s.card_room_for_targets_mb.trim().is_empty() {
-        set("VICTORY_CARD_ROOM_FOR_TARGETS_MB", s.card_room_for_targets_mb.trim().to_string());
-    }
+    // NO VICTORY_CARD_ROOM_FOR_TARGETS_MB (Zero-Regression Lock #6): never emit it.
     if !s.texture_budget_mb.trim().is_empty() {
         set("VICTORY_TEXTURE_BUDGET_MB", s.texture_budget_mb.trim().to_string());
     }
@@ -309,7 +307,7 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
 
     let log_dir = logs_dir();
     let stamp = local_timestamp_filename();
-    let log_path = log_dir.join(format!("Session-{stamp}.log"));
+    let log_path = log_dir.join(format!("Game-{stamp}.log"));
     let mut file = OpenOptions::new()
         .create(true)
         .append(true)
@@ -331,7 +329,7 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
     let perf_env_pairs = if kind.is_victory_family() {
         resolve_victory_launch_env(s, &runner_path, kind, sys)
     } else {
-        build_runner_env(s)
+        build_victory_env(s)
     };
     let perf_env_parts: Vec<String> = perf_env_pairs
         .iter()
@@ -344,7 +342,7 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
     };
 
     let header = format!(
-        "=== Game Master 6 v{} session ({})\n\
+        "=== Game - GameMaster6 v{} session ({})\n\
          exe              : {}\n\
          game_dir         : {}\n\
          runner           : {}\n\
@@ -423,7 +421,7 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
         if !s.shader_loop_limit.trim().is_empty() {
             cmd.env("VICTORY_SHADER_LOOP_LIMIT", s.shader_loop_limit.trim());
         }
-        cmd.env("VICTORY_WINDOW_TITLE", "Game Master 6")
+        cmd.env("VICTORY_WINDOW_TITLE", "Title")
             .env("VICTORY_WINDOW_ICON", Settings::app_dir().join("logo.ico"));
     } else if kind == crate::runners::RunnerKind::Xcl {
         // Dedicated XCL compatibility layer env/arg mapping (without forcing Victory-only flags)
@@ -606,8 +604,8 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
     let use_warm_cmd = caps.has_warm;
     let ztrx = is_ztrx_runner(&runner_path);
     let lower_runner = runner_path.to_string_lossy().to_ascii_lowercase();
-    let baseline = lower_runner.contains("baseline") || lower_runner.contains("overnight-tuned");
-    let use_cache_flag = !ztrx && !baseline;
+    let victory = lower_runner.contains("victory") || lower_runner.contains("overnight-tuned");
+    let use_cache_flag = !ztrx && !victory;
     let flags_desc = if use_shaders_cmd && use_warm_cmd {
         format!("shaders --jobs {jobs} && warm")
     } else if use_shaders_cmd {
@@ -619,7 +617,7 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
     };
 
     let header = format!(
-        "=== Game Master 6 v1.4 shader preparation ({})\n\
+        "=== Game - GameMaster6 v16.1 shader preparation ({})\n\
          runner   : {}\n\
          cmd      : {}\n\
          shaders  : {}\n\
@@ -701,7 +699,7 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
     if !s.shader_loop_limit.trim().is_empty() {
         pcmd.env("VICTORY_SHADER_LOOP_LIMIT", s.shader_loop_limit.trim());
     }
-    for (key, val) in build_runner_env(s) {
+    for (key, val) in build_victory_env(s) {
         pcmd.env(key, val);
     }
     let child = pcmd
@@ -836,11 +834,19 @@ pub fn poll(session: &mut ActiveSession) -> PollUpdate {
 }
 
 pub fn stop(session: &mut ActiveSession) {
-    session.job.take();
+    session.job.take(); // dropping Job Object kills on close (JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE)
     let _ = session.child.kill();
     let _ = session.child.wait();
     session.release_session_hooks();
     let _ = kill_stray_runners();
+    // EXIT WATCHDOG (background, non-blocking): kill re-spawned strays after settle. Zero zombies.
+    let _ = kill_stray_runners();
+    std::thread::spawn(|| {
+        std::thread::sleep(std::time::Duration::from_millis(600));
+        let _ = kill_stray_runners();
+        std::thread::sleep(std::time::Duration::from_millis(900));
+        let _ = kill_stray_runners();
+    });
 }
 
 /// Parses ztrx / VIctory live frame telemetry lines such as:
@@ -1085,7 +1091,7 @@ pub fn resolve_victory_launch_env(
         }
         set("VICTORY_HOST_WAVE", "32".into());
 
-        // Required so Streamline DLSS Frame Generation stays ON
+        // Required so Streamline DLSS Frame Generation stays ON (~20+ base FPS instead of 4 FPS)
         set("VICTORY_ASYNC_SUBMIT", "1".into());
         set("VICTORY_THIN", "1".into());
         set("VICTORY_JOIN_PARTS", "8".into());
@@ -1172,6 +1178,7 @@ pub fn resolve_victory_launch_env(
         set("VICTORY_FRAMEGEN", if fg_x > 0 { "1" } else { "0" }.into());
         set("VICTORY_FRAMEGEN_X", fg_x.to_string());
         set("VICTORY_MENU_FRAMEGEN", fg_x.to_string());
+        set("VICTORY_MENU_FG_TYPE", "auto".into());
 
         if let Some(prof) = crate::runners::load_runner_profile(runner_path) {
             for (k, v) in prof.env {
@@ -1187,10 +1194,33 @@ pub fn resolve_victory_launch_env(
                 }
             }
         }
+
+        // ===== ZERO-REGRESSION LOCK: re-apply invariants AFTER runner/victory-settings overrides =====
+        // 1. Fullscreen borderless
+        set("VICTORY_FULLSCREEN", if s.borderless { "1".into() } else { "0".into() });
+        set("VICTORY_BORDERLESS", if s.borderless { "1".into() } else { "0".into() });
+        // 2. Cursor capture; native keyboard/mouse; no PowerShell in-game
+        set("VICTORY_MOUSE_CAPTURE", if s.mouse_capture { "1".into() } else { "0".into() });
+        // 5. FPS & DLSS/FG; 1440p; no 4K; no 20us/50000us
+        set("VICTORY_ASYNC_SUBMIT", "1".into());
+        set("VICTORY_THIN", "1".into());
+        set("VICTORY_MENU_FPS", "1000".into());
+        set("VICTORY_FRAME_INTERVAL_US", "1000".into());
+        set("VICTORY_NATIVE_1440P", if native_1440 { "1".into() } else { "0".into() });
+        set("VICTORY_MENU_RES", if native_1440 { "1440".into() } else { "1080".into() });
+        set("VICTORY_MENU_FG_TYPE", "auto".into());
+        // 6. Anti-whiteout & zero VRAM; NO VICTORY_CARD_ROOM_FOR_TARGETS_MB
+        set("VICTORY_SHOW_NEW_LATER", "0".into());
+        set("VICTORY_TEXTURE_CATCHUP", "1".into());
+        set("VICTORY_TEXTURE_ROOM_PERCENT", tex_room.to_string());
+        drop(set);
+        // NO VICTORY_CARD_ROOM_FOR_TARGETS_MB anywhere
+        out.retain(|(k, _)| !k.eq_ignore_ascii_case("VICTORY_CARD_ROOM_FOR_TARGETS_MB"));
+
         return out;
     }
 
-    let mut out = build_runner_env(s);
+    let mut out = build_victory_env(s);
     let mut set = |k: &str, v: String| {
         if let Some(existing) = out.iter_mut().find(|(ek, _)| ek == k) {
             existing.1 = v;
@@ -1202,9 +1232,7 @@ pub fn resolve_victory_launch_env(
     set("VICTORY_GAME_DIR", s.game_dir.clone());
     set("VICTORY_LOG", s.effective_victory_log().to_string());
 
-    if sys.gpu_arch != crate::diagnostics::GpuArch::AmdRdna {
-        set("VICTORY_HOST_WAVE", "32".into());
-    }
+    set("VICTORY_HOST_WAVE", "32".into());
 
     if let Some(vault) = crate::saves::shared_save_vault_dir() {
         set("VICTORY_DATA_DIR", vault.to_string_lossy().into_owned());
@@ -1273,7 +1301,7 @@ mod tests {
         assert_eq!(get("VICTORY_SHOW_NEW_LATER"), Some("0"));
         assert_eq!(get("VICTORY_TEXTURE_CATCHUP"), Some("1"));
         assert_eq!(get("VICTORY_THIN"), Some("1"));
-        assert_eq!(get("VICTORY_MOUSE_CAPTURE"), Some("0"));
+        assert_eq!(get("VICTORY_MOUSE_CAPTURE"), Some("1"));
         if let Some(vault) = crate::saves::shared_save_vault_dir() {
             assert_eq!(get("VICTORY_DATA_DIR"), Some(vault.to_string_lossy().as_ref()));
         }
@@ -1283,7 +1311,7 @@ mod tests {
 
     #[test]
     fn balanced_victory_nvidia_env_has_required_flags_and_no_stale_caps() {
-        let tmp = std::env::temp_dir().join(format!("gm6_v15_bal_test_{}", std::process::id()));
+        let tmp = std::env::temp_dir().join(format!("gm_v16_3_bal_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tmp);
         std::fs::create_dir_all(&tmp).unwrap();
         let exe = tmp.join("victory.exe");
@@ -1331,12 +1359,69 @@ mod tests {
     #[test]
     fn gpu_preference_targets_only_runners() {
         use crate::win32::is_allowed_gpu_pref_target;
-        assert!(is_allowed_gpu_pref_target(Path::new(r"C:\Games\runners\baseline\victory.exe")));
+        assert!(is_allowed_gpu_pref_target(Path::new(r"C:\Games\runners\victory\victory.exe")));
         assert!(is_allowed_gpu_pref_target(Path::new(r"D:\Tools\victory-diag.exe")));
         assert!(is_allowed_gpu_pref_target(Path::new(r"D:\Tools\GameRunner.exe")));
         assert!(!is_allowed_gpu_pref_target(Path::new(r"C:\Windows\System32\cmd.exe")));
         assert!(!is_allowed_gpu_pref_target(Path::new(r"C:\Windows\explorer.exe")));
         assert!(!is_allowed_gpu_pref_target(Path::new(r"C:\Windows\Temp\victory.exe")));
         assert!(!is_allowed_gpu_pref_target(Path::new(r"D:\Random\notepad.exe")));
+    }
+    #[test]
+    fn zero_regression_lock_all_eight_rules() {
+        let tmp = std::env::temp_dir().join(format!("gm_zrl_test_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let exe = tmp.join("victory.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        std::fs::write(tmp.join("sl.interposer.dll"), b"DLL").unwrap();
+        let mut s = Settings::default();
+        s.console_model = "series-x".into();
+        s.borderless = true; // VICTORY_FULLSCREEN=1 + VICTORY_BORDERLESS=1
+        s.mouse_capture = true; // VICTORY_MOUSE_CAPTURE=1
+        s.texture_room_percent = "85".into(); // 12 GB tier
+        s.dlss_mode = "balanced".into();
+        s.framegen_x = 2;
+        s.async_submit = true;
+        s.thin_lists = true;
+        s.card_room_for_targets_mb = "9999".into(); // must NOT be emitted
+        let mut sys = SystemInfo::default();
+        sys.vram_gb = 12.0;
+        let env = resolve_victory_launch_env(&s, &exe, crate::runners::RunnerKind::Victory, &sys);
+        let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
+
+        // Rule 1: Fullscreen borderless
+        assert_eq!(get("VICTORY_FULLSCREEN"), Some("1"));
+        assert_eq!(get("VICTORY_BORDERLESS"), Some("1"));
+        // Rule 2: Cursor capture wired (mouse capture); no PowerShell spawned here
+        assert_eq!(get("VICTORY_MOUSE_CAPTURE"), Some("1"));
+        // Rule 5: FPS & DLSS/FG; 1440p; never 4K; never 20us/50000us
+        assert_eq!(get("VICTORY_ASYNC_SUBMIT"), Some("1"));
+        assert_eq!(get("VICTORY_THIN"), Some("1"));
+        assert_eq!(get("VICTORY_MENU_FPS"), Some("1000"));
+        assert_eq!(get("VICTORY_FRAME_INTERVAL_US"), Some("1000"));
+        assert_ne!(get("VICTORY_MENU_FPS"), Some("20"));
+        assert_ne!(get("VICTORY_FRAME_INTERVAL_US"), Some("50000"));
+        assert_eq!(get("VICTORY_NATIVE_1440P"), Some("1"));
+        assert_eq!(get("VICTORY_MENU_RES"), Some("1440"));
+        assert!(get("VICTORY_DLSS") == Some("1"), "DLSS on");
+        assert!(get("VICTORY_FRAMEGEN") == Some("1"), "frame generation on");
+        assert!(get("VICTORY_OUTPUT") != Some("3840x2160"), "no 3840x2160 fallback");
+        // Rule 6: Anti-whiteout & zero VRAM
+        assert_eq!(get("VICTORY_SHOW_NEW_LATER"), Some("0"));
+        assert_eq!(get("VICTORY_TEXTURE_CATCHUP"), Some("1"));
+        assert_eq!(get("VICTORY_TEXTURE_ROOM_PERCENT"), Some("85"));
+        assert_eq!(get("VICTORY_CARD_ROOM_FOR_TARGETS_MB"), None);
+        // Rule 8 handled in config tests; rules 3,4,7 are process-lifecycle invariants verified elsewhere.
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // Rule 8: config backward-compatibility (unknown KBM/AMD fields ignored, serde-style defaults).
+    #[test]
+    fn config_backward_compat_unknown_fields_ignored() {
+        let legacy = "input_mode=kbm\nkeymap=A=Enter\nkeymap_preset=gm-pc\nmouse_aim=true\nmouse_lock=true\nkbm_crosshair=true\namd_runner=DexNom\nunknown_future_field=42\nmouse_capture=true\n";
+        let s = Settings::parse_from_str(legacy);
+        assert!(s.mouse_capture);
+        assert!(s.borderless);
     }
 }

@@ -35,6 +35,10 @@ struct AppState {
     audit: AssetAudit,
     session: Option<ActiveSession>,
     view: usize,
+    diag_sub: usize,
+    settings_sub: usize,
+    update_rx: Option<Receiver<crate::update_check::UpdateStatus>>,
+    update_available: bool,
     hover: Target,
     hits: Vec<(RECT, Target)>,
     status_text: String,
@@ -75,7 +79,6 @@ struct AppState {
     fps_history: Vec<u32>,
     runner_benches: Vec<RunnerBenchSummary>,
     mods: Vec<ModItem>,
-    listening_keybind: Option<usize>,
     shader_census: ShaderCensus,
     census_rx: Option<Receiver<Result<ShaderCensus, String>>>,
     last_crash: Option<(String, String, PathBuf)>,
@@ -209,6 +212,23 @@ impl AppState {
         self.portwatch_rx = Some(rx);
     }
 
+    /// Non-blocking background update check; suspended while the game runs.
+    fn start_update_check(&mut self) {
+        if self.update_rx.is_some() {
+            return;
+        }
+        if self.session.is_some() {
+            return; // suspended while game runs
+        }
+        let version = env!("CARGO_PKG_VERSION").to_string();
+        let local_commit = self.runners.iter()
+            .find(|r| r.repo.to_ascii_lowercase().contains("victory-nvidia"))
+            .map(|r| r.commit.clone())
+            .unwrap_or_default();
+        let rx = crate::update_check::check_updates_nonblocking(version, local_commit, self.settings.offline_mode);
+        self.update_rx = Some(rx);
+    }
+
     fn start_tip_probe(&mut self) {
         if self.tip_rx.is_some() {
             return;
@@ -326,6 +346,7 @@ unsafe fn handle_launch_or_stop(hwnd: HWND) {
         }
         KillTimer(hwnd, TIMER_ID);
         SetTimer(hwnd, TIMER_ID, 150, None);
+        let _ = kill_stray_runners();
         st.status_text = "STOPPED".into();
         st.status_kind = StatusKind::Warning;
         st.set_toast(format!("Stopped {}", kind.label()));
@@ -338,28 +359,32 @@ unsafe fn handle_launch_or_stop(hwnd: HWND) {
         let _ = saves::backup_saves();
         st.backup_count = saves::count_backups();
     }
+    // AUTO (THIS PC): resolve NVIDIA generation + VRAM tiering before launch.
+    if st.settings.active_preset.eq_ignore_ascii_case("auto") || st.settings.active_preset.is_empty() {
+        let _ = crate::presets::apply_adaptive_preset(&mut st.settings, crate::presets::PresetKind::Auto, &st.sys);
+    }
     match launcher::start(&st.settings, &st.sys) {
         Ok(sess) => {
             st.last_crash = None;
             st.status_text = "RUNNING".into();
             st.status_kind = StatusKind::Running;
-            st.log_lines = vec![format!("Started Game Master 6 runner -> {}", sess.log_path.display())];
+            st.log_lines = vec![format!("Started Game runner -> {}", sess.log_path.display())];
             st.log_scroll = 0;
             st.session = Some(sess);
             st.recent_logs = list_recent_logs(12);
             st.selected_log = 0;
-            st.set_toast("Launched Game Master 6");
+            st.set_toast("Launched Title");
             st.fps_history.clear();
             if st.settings.hud_overlay {
                 if let Some(ref mut hud) = st.hud {
                     hud.set_mode(st.settings.hud_mode);
                     hud.set_corner(st.settings.hud_corner);
                     let rname = st.settings.resolved_runner().file_name().and_then(|s| s.to_str()).unwrap_or("runner").to_string();
-                    hud.update(&format!("Game Master 6 · {rname} · STARTING..."), rgb(0, 240, 255));
+                    hud.update(&format!("Title · {rname} · STARTING..."), rgb(0, 240, 255));
                 }
             }
             KillTimer(hwnd, TIMER_ID);
-            SetTimer(hwnd, TIMER_ID, if st.settings.kbm_crosshair { 120 } else { 500 }, None);
+            SetTimer(hwnd, TIMER_ID, 500, None);
             if st.settings.zero_overhead {
                 ShowWindow(hwnd, SW_MINIMIZE);
             }
@@ -367,7 +392,7 @@ unsafe fn handle_launch_or_stop(hwnd: HWND) {
         Err(e) => {
             st.status_text = "LAUNCH BLOCKED".into();
             st.status_kind = StatusKind::Error;
-            show_msg(hwnd, &e, "Cannot Launch Game Master 6", MB_ICONWARNING | MB_OK);
+            show_msg(hwnd, &e, "Cannot Launch Game", MB_ICONWARNING | MB_OK);
         }
     }
     redraw(hwnd);
@@ -429,9 +454,8 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
     match target {
         Target::None => {}
         Target::Nav(idx) => {
-            st.listening_keybind = None;
             st.view = idx;
-            if idx != 3 {
+            if idx != 4 {
                 st.tuning_scroll = 0;
             }
             if idx == 1
@@ -634,7 +658,8 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             }
         }
         Target::ViewLogsQuick => {
-            st.view = 4;
+            st.view = 3;
+            st.diag_sub = 1;
             st.recent_logs = list_recent_logs(12);
             if st.session.is_none() {
                 st.load_selected_log();
@@ -642,7 +667,8 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             redraw(hwnd);
         }
         Target::TuneQuick => {
-            st.view = 3;
+            st.view = 4;
+            st.settings_sub = 1;
             redraw(hwnd);
         }
         Target::RunnersQuick => {
@@ -974,6 +1000,13 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         }
         Target::UpdateRunner(idx) => {
             if let Some(run) = st.runners.get(idx).cloned() {
+                // Auto-backup saves before runner update (ON by default); backs up victory.exe->victory.exe.bak.
+                if st.settings.auto_backup_before_update {
+                    match crate::saves::backup_saves() {
+                        Ok((p, n)) => st.set_toast(format!("Auto-backed up {n} save files -> {}", p.display())),
+                        Err(e) => st.set_toast(format!("Save auto-backup skipped: {e}")),
+                    }
+                }
                 match crate::builder::launch_update_runner(&run.path, &st.settings.game_dir) {
                     Ok(()) => {
                         st.set_toast(format!("Updating {} in external terminal...", run.name));
@@ -1054,18 +1087,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             st.save_settings("Cleared all skipped shader hashes");
             redraw(hwnd);
         }
-        Target::ShowKeymap => {
-            st.view = 5;
-            if st.session.is_some() {
-                st.set_toast("Opened Controls (XInput polling paused while game is running)");
-            } else {
-                st.sys.xinput_pad_details = poll_xinput_pads();
-                st.sys.xinput_pads = st.sys.xinput_pad_details.iter().filter(|p| p.connected).count() as u32;
-                st.set_toast("Opened Controls & Live Keybind Remapper");
-            }
-            redraw(hwnd);
-            return;
-        }
+        // KBM keymap screen removed.
         Target::ExportAiBundle => {
             match export_ai_debug_bundle(
                 &st.settings,
@@ -1254,7 +1276,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         }
         Target::OpenReleasesPage => {
             if !st.settings.offline_mode {
-                open_path(hwnd, std::path::Path::new("https://github.com/game-master-6/game-master-6/releases"));
+                open_path(hwnd, std::path::Path::new("https://github.com/gamemaster/game-master-6/releases"));
             }
         }
         Target::OpenSessionsCsv => {
@@ -1435,7 +1457,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             st.log_scroll = 0;
             redraw(hwnd);
         }
-        Target::CopySessionTail => {
+        Target::CopyLogmil => {
             let start = st.log_lines.len().saturating_sub(80);
             let snippet = st.log_lines[start..].join("\n");
             if copy_to_clipboard(hwnd, &snippet) {
@@ -1498,6 +1520,15 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             });
             redraw(hwnd);
         }
+        Target::ToggleAutoBackupBeforeUpdate => {
+            st.settings.auto_backup_before_update = !st.settings.auto_backup_before_update;
+            st.save_settings(if st.settings.auto_backup_before_update {
+                "Auto-backup saves before runner update enabled"
+            } else {
+                "Auto-backup saves before runner update disabled"
+            });
+            redraw(hwnd);
+        }
         Target::ToggleAutoBackup => {
             st.settings.auto_backup_saves = !st.settings.auto_backup_saves;
             st.save_settings(if st.settings.auto_backup_saves {
@@ -1541,14 +1572,37 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             st.save_settings(&format!("HUD overlay mode: {lbl}"));
             redraw(hwnd);
         }
-        Target::CycleKeymapPreset => {
-            let lbl = st.settings.cycle_keymap_preset();
-            st.save_settings(&format!("Keymap standard: {lbl}"));
+        Target::ApplyPresetAuto => {
+            let msg = crate::presets::apply_adaptive_preset(&mut st.settings, crate::presets::PresetKind::Auto, &st.sys);
+            st.save_settings(&msg);
+            redraw(hwnd);
+        }
+        Target::DiagSub(idx) => {
+            st.diag_sub = idx.min(1);
+            redraw(hwnd);
+        }
+        Target::SettingsSub(idx) => {
+            st.settings_sub = idx.min(1);
+            redraw(hwnd);
+        }
+        Target::ExportSaves => {
+            match crate::saves::export_saves_zip() {
+                Ok((path, n)) => st.set_toast(format!("Exported {n} files -> {}", path.display())),
+                Err(e) => st.set_toast(format!("Save export failed: {e}")),
+            }
+            st.refresh_diagnostics(false);
+            redraw(hwnd);
+        }
+        Target::ImportSaves => {
+            match crate::saves::restore_latest_backup() {
+                Ok((name, n)) => st.set_toast(format!("Restored {n} files from {name}")),
+                Err(e) => st.set_toast(format!("Restore failed: {e}")),
+            }
             redraw(hwnd);
         }
         Target::CycleAbExperiment => {
             let lbl = st.settings.cycle_ab_experiment();
-            st.save_settings(&format!("Live BASELINE {lbl}"));
+            st.save_settings(&format!("Live victory {lbl}"));
             redraw(hwnd);
         }
         Target::SafeBootRollback => {
@@ -1638,13 +1692,13 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             }
         }
         Target::CaptureScreenshot => {
-            let cap = crate::diagnostics::captures_dir().join(format!("Session-{}.bmp", local_timestamp_filename()));
+            let cap = crate::diagnostics::captures_dir().join(format!("Game-{}.bmp", local_timestamp_filename()));
             match capture_screen_bmp(&cap) {
                 Ok(()) => {
                     st.set_toast(format!("Screenshot saved: captures\\{}", cap.file_name().unwrap_or_default().to_string_lossy()));
                     if let Some(ref mut hud) = st.hud {
                         if st.settings.hud_overlay && st.session.is_some() {
-                            hud.update("Game Master 6 · SCREENSHOT SAVED (captures\\)", rgb(34, 211, 138));
+                            hud.update("Title · SCREENSHOT SAVED (captures\\)", rgb(34, 211, 138));
                         }
                     }
                 }
@@ -1653,7 +1707,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             redraw(hwnd);
         }
         Target::CreateDesktopShortcut => {
-            let exe = std::env::current_exe().unwrap_or_else(|_| Settings::app_dir().join("Game Master.exe"));
+            let exe = std::env::current_exe().unwrap_or_else(|_| Settings::app_dir().join("GameMaster6.exe"));
             let ico = Settings::app_dir().join("logo.ico");
             match create_desktop_shortcut(&exe, &ico) {
                 Ok(lnk) => {
@@ -1666,23 +1720,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             }
             redraw(hwnd);
         }
-        Target::CycleInputMode => {
-            let lbl = st.settings.cycle_input_mode();
-            st.save_settings(&format!("Input device mode: {lbl}"));
-            redraw(hwnd);
-        }
-        Target::RemapKeybind(idx) => {
-            if let Some(&(_, label, _)) = crate::config::KEYBIND_SLOTS.get(idx) {
-                st.listening_keybind = Some(idx);
-                st.set_toast(format!("Press any key for '{label}' (Esc to cancel)..."));
-                redraw(hwnd);
-            }
-        }
-        Target::ResetKeybinds => {
-            st.settings.keymap = Settings::default_keymap_string();
-            st.save_settings("Keyboard stand-in keybinds reset to defaults");
-            redraw(hwnd);
-        }
+        // KBM stand-in remapper removed; native keyboard & mouse handled by VIctory-NVIDIA (VICTORY_MOUSE_CAPTURE=1).
         Target::CycleRelayMode => {
             let lbl = st.settings.cycle_relay_mode();
             st.save_settings(&format!("Async GPU Relay (VICTORY_RELAY): {lbl}"));
@@ -1809,20 +1847,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             });
             redraw(hwnd);
         }
-        Target::ToggleKbmCrosshair => {
-            st.settings.kbm_crosshair = !st.settings.kbm_crosshair;
-            if !st.settings.kbm_crosshair {
-                if let Some(ref mut ch) = st.crosshair {
-                    ch.hide();
-                }
-            }
-            st.save_settings(if st.settings.kbm_crosshair {
-                "Open-World center reticle + auto menu cursor (Esc/Tab/F8) enabled"
-            } else {
-                "Open-World center reticle disabled"
-            });
-            redraw(hwnd);
-        }
+        // KBM crosshair removed; native cursor handling via VICTORY_MOUSE_CAPTURE.
         Target::ToggleProfiler => {
             st.settings.profiler_on = !st.settings.profiler_on;
             st.save_settings(if st.settings.profiler_on {
@@ -1957,29 +1982,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             st.save_settings(&format!("VICTORY_QUEUE2_LANDING_MB={next}"));
             redraw(hwnd);
         }
-        Target::ToggleMouseAim => {
-            st.settings.mouse_aim = !st.settings.mouse_aim;
-            st.save_settings(if st.settings.mouse_aim {
-                "Mouse Aim camera + LMB/RMB triggers enabled (VICTORY_MOUSE_AIM=1)"
-            } else {
-                "Mouse Aim disabled (using keyboard camera binds)"
-            });
-            redraw(hwnd);
-        }
-        Target::CycleMouseSens => {
-            let lbl = st.settings.cycle_mouse_sens();
-            st.save_settings(&format!("Mouse Aim sensitivity set to {lbl}"));
-            redraw(hwnd);
-        }
-        Target::ToggleMouseLock => {
-            st.settings.mouse_lock = !st.settings.mouse_lock;
-            st.save_settings(if st.settings.mouse_lock {
-                "360-degree Mouse Lock enabled (press F8 in-game to pause/release)"
-            } else {
-                "Mouse Lock disabled (free cursor)"
-            });
-            redraw(hwnd);
-        }
+        // KBM mouse-aim / sensitivity / lock removed; native keyboard & mouse handled by VIctory-NVIDIA.
         Target::ToggleMouseCapture => {
             st.settings.mouse_capture = !st.settings.mouse_capture;
             st.save_settings(if st.settings.mouse_capture {
@@ -2008,12 +2011,8 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             }
         }
         Target::OneClickAutoSetup => {
-            // 1. Auto-pick best runner for this GPU (VIctory-NVIDIA for NVIDIA RTX; DexNom for AMD)
-            let preferred_slug = if st.sys.gpu_arch == crate::diagnostics::GpuArch::AmdRdna {
-                "dexnom"
-            } else {
-                "victory-nvidia"
-            };
+            // 1. Auto-pick best NVIDIA runner for this GPU (VIctory-NVIDIA primary)
+            let preferred_slug = "victory-nvidia";
             if !st.settings.resolved_runner().is_file() {
                 let runners = discover_runners(&st.settings);
                 if let Some(best) = runners.iter().find(|r| r.name.to_ascii_lowercase().contains(preferred_slug))
@@ -2047,7 +2046,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             if std::path::Path::new(&st.settings.exe).is_file() && rpath.is_file() {
                 handle_prepare(hwnd);
             } else {
-                st.set_toast("Runner & DLSS configured! Browse/drop your game executable to warm shaders.");
+                st.set_toast("Runner & DLSS configured! Browse/drop your game_native_master.exe to warm shaders.");
             }
             redraw(hwnd);
         }
@@ -2087,6 +2086,17 @@ unsafe fn on_timer(hwnd: HWND) {
     let game_running = st.session.as_ref().is_some_and(|s| s.kind == launcher::ProcessKind::Game);
 
     if !game_running {
+        // 1-Click Update Check: non-blocking, suspended while game runs.
+        if let Some(ref urx) = st.update_rx {
+            if let Ok(us) = urx.try_recv() {
+                st.update_available = us.update_available_pill();
+                st.update_rx = None;
+                changed = true;
+            }
+        }
+        if st.update_rx.is_none() && st.anim_tick % 120 == 0 {
+            st.start_update_check();
+        }
         if let Some(ref prx) = st.portwatch_rx {
             if let Ok(snap) = prx.try_recv() {
                 let count = snap.projects.len();
@@ -2177,7 +2187,7 @@ unsafe fn on_timer(hwnd: HWND) {
                     vec.remove(0);
                 }
             }
-            if st.view == 4 {
+            if st.view == 3 {
                 changed = true;
             }
         }
@@ -2214,7 +2224,7 @@ unsafe fn on_timer(hwnd: HWND) {
                     sess.window_closed_at = None;
                     if !sess.window_branded {
                         let ico = Settings::app_dir().join("logo.ico");
-                        if unsafe { brand_runner_window(pid, "Game Master 6", &ico, true) } {
+                        if unsafe { brand_runner_window(pid, "Title", &ico, true) } {
                             sess.window_branded = true;
                         }
                     }
@@ -2301,14 +2311,14 @@ unsafe fn on_timer(hwnd: HWND) {
                     let secs = sess.started_at.elapsed().as_secs();
                     let ram_str = if ws_gb > 0.01 { format!("{ws_gb:.1}G") } else { "-".into() };
                     hud.update(
-                        &format!("Game Master 6 · {} {:02}:{:02} · RAM {ram_str}", sess.kind.label(), secs / 60, secs % 60),
+                        &format!("Title · {} {:02}:{:02} · RAM {ram_str}", sess.kind.label(), secs / 60, secs % 60),
                         rgb(0, 240, 255),
                     );
                 }
             }
         }
         if let Some(ref mut ch) = st.crosshair {
-            ch.sync(st.settings.kbm_crosshair);
+            ch.sync(false);
         }
         if let Some(update) = poll_res {
             if !update.new_lines.is_empty() {
@@ -2515,6 +2525,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 audit,
                 session: None,
                 view: 0,
+                diag_sub: 0,
+                settings_sub: 0,
+                update_rx: None,
+                update_available: false,
                 hover: Target::None,
                 hits: Vec::new(),
                 status_text,
@@ -2563,8 +2577,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 fps_history: Vec::new(),
                 runner_benches: Vec::new(),
                 mods: saves::list_mods(8),
-                listening_keybind: None,
-                shader_census: ShaderCensus { translated: 0, total: 0, refused: 0, summary: "BASELINE translator active. Click RUN CENSUS to scan the local shader archive.".into() },
+                                shader_census: ShaderCensus { translated: 0, total: 0, refused: 0, summary: "Active runner ready. Click RUN CENSUS to scan the local shader archive.".into() },
                 census_rx: None,
                 last_crash: None,
                 dismissed_warning: None,
@@ -2680,8 +2693,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 commit_history: &st.commit_history,
                 recent_sessions: &st.recent_sessions,
                 proc_stats: st.proc_stats,
-                listening_keybind: st.listening_keybind,
-                shader_census: &st.shader_census,
+                                shader_census: &st.shader_census,
                 census_running: st.census_rx.is_some(),
                 last_crash: st.last_crash.as_ref(),
                 dismissed_warning: st.dismissed_warning.as_deref(),
@@ -2697,6 +2709,9 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 cache_hash_mismatch: st.cache_hash_mismatch,
                 beats_baseline: st.beats_baseline,
                 show_shortcuts: st.show_shortcuts,
+                diag_sub: st.diag_sub,
+                settings_sub: st.settings_sub,
+                update_available: st.update_available,
             };
             st.hits = paint(mem, w, h, &ctx);
 
@@ -2760,7 +2775,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
         WM_MOUSEWHEEL => {
             let st = state(hwnd);
             let delta = ((wparam >> 16) as u16) as i16;
-            if st.view == 4 {
+            if st.view == 3 && st.diag_sub == 1 {
                 if delta > 0 {
                     st.log_scroll = st.log_scroll.saturating_add(4);
                 } else {
@@ -2785,7 +2800,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                     st.portwatch_scroll = (st.portwatch_scroll + 2).min(max_sc);
                 }
                 redraw(hwnd);
-            } else if st.view == 3 {
+            } else if st.view == 4 && st.settings_sub == 1 {
                 let mut cr = RECT::default();
                 GetClientRect(hwnd, &mut cr);
                 let max = tuning_max_scroll(cr.bottom);
@@ -2799,28 +2814,10 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
             0
         }
         WM_KEYDOWN => {
-            let st = state(hwnd);
-            if let Some(slot_idx) = st.listening_keybind {
-                let vk = wparam as u8;
-                if vk == 0x1B {
-                    st.listening_keybind = None;
-                    st.set_toast("Keybind capture cancelled");
-                    redraw(hwnd);
-                    return 0;
-                }
-                if let Some(kname) = vk_to_bind_name(vk) {
-                    if let Some(&(code, label, _)) = crate::config::KEYBIND_SLOTS.get(slot_idx) {
-                        st.settings.set_keybind(code, &kname);
-                        st.listening_keybind = None;
-                        st.save_settings(&format!("Bound {label} -> {}", kname.to_ascii_uppercase()));
-                        redraw(hwnd);
-                        return 0;
-                    }
-                }
-            }
+            let _st = state(hwnd);
             let ctrl = (GetKeyState(VK_CONTROL) as u16 & 0x8000) != 0;
             match wparam {
-                0x31..=0x37 => {
+                0x31..=0x35 => {
                     handle_click(hwnd, Target::Nav(wparam - 0x31));
                 }
                 VK_F5 => handle_click(hwnd, Target::Rescan),
@@ -2849,7 +2846,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                         handle_click(hwnd, Target::KillStrayRunners);
                     }
                 }
-                905 => handle_click(hwnd, Target::ToggleMouseLock),
+                905 => {}
                 _ => {}
             }
             0
@@ -2863,7 +2860,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
             if st.session.is_some() {
                 let ans = show_msg(
                     hwnd,
-                    "A runner session is still active. Closing Game Master will stop it.\n\nClose anyway?",
+                    "A runner session is still active. Closing GameMaster6 will stop it.\n\nClose anyway?",
                     "Active Session",
                     MB_ICONWARNING | MB_YESNO,
                 );
@@ -2953,13 +2950,13 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
 
 pub fn run() {
     std::panic::set_hook(Box::new(|info| {
-        let text = format!("Game Master v1.4 error:\n\n{info}");
+        let text = format!("GameMaster6 v1.6.0 error:\n\n{info}");
         let dir = Settings::app_dir().join("logs");
         let _ = std::fs::create_dir_all(&dir);
         let _ = std::fs::write(dir.join("crash.txt"), &text);
         unsafe {
             let a = wide(&text);
-            let b = wide("Game Master 6");
+            let b = wide("Game - GameMaster6");
             MessageBoxW(std::ptr::null_mut(), a.as_ptr(), b.as_ptr(), MB_ICONERROR | MB_OK);
         }
     }));
@@ -2969,6 +2966,15 @@ pub fn run() {
         CoInitializeEx(std::ptr::null_mut(), COINIT_APARTMENTTHREADED);
 
         let args: Vec<String> = std::env::args().collect();
+        // CLI parity for 1-Click Save Manager (also available as EXPORT SAVES in SAVES & BENCH).
+        if args.iter().any(|a| a == "--export-saves") {
+            match crate::saves::export_saves_zip() {
+                Ok((p, n)) => println!("EXPORT SAVES ok: {} files -> {}", n, p.display()),
+                Err(e) => { eprintln!("EXPORT SAVES failed: {e}"); }
+            }
+            CoUninitialize();
+            return;
+        }
         if let Some(pos) = args.iter().position(|a| a == "--dump-ui") {
             let out_dir = args.get(pos + 1).map(PathBuf::from).unwrap_or_else(|| Settings::app_dir().join("ui_dump"));
             dump_ui_tabs(&out_dir);
@@ -2976,8 +2982,8 @@ pub fn run() {
             return;
         }
 
-        let class = wide("GameMaster6Class");
-        let title = wide("Game Master 6 v1.4");
+        let class = wide("GameMasterViceV2Class");
+        let title = wide("GameMaster6 v1.6.0");
         let hinst = GetModuleHandleW(std::ptr::null());
         let wc = WNDCLASSEXW {
             cb_size: std::mem::size_of::<WNDCLASSEXW>() as UINT,
@@ -3023,8 +3029,8 @@ pub fn run() {
             std::ptr::null_mut(),
         );
         if hwnd.is_null() {
-            let a = wide("Could not create the Game Master window.");
-            let b = wide("Game Master 6");
+            let a = wide("Could not create the GameMaster6 window.");
+            let b = wide("Game - GameMaster6");
             MessageBoxW(std::ptr::null_mut(), a.as_ptr(), b.as_ptr(), MB_ICONERROR | MB_OK);
             CoUninitialize();
             return;
@@ -3061,23 +3067,7 @@ fn push_history(buf: &mut Vec<u32>, val: u32) {
 }
 
 
-fn vk_to_bind_name(vk: u8) -> Option<String> {
-    match vk {
-        0x0D => Some("Enter".into()),
-        0x08 => Some("Back".into()),
-        0x09 => Some("Tab".into()),
-        0x20 => Some("Space".into()),
-        0x26 => Some("Up".into()),
-        0x28 => Some("Down".into()),
-        0x25 => Some("Left".into()),
-        0x27 => Some("Right".into()),
-        0x10 | 0xA0 | 0xA1 => Some("Shift".into()),
-        0x11 | 0xA2 | 0xA3 => Some("Ctrl".into()),
-        0x12 | 0xA4 | 0xA5 => Some("Alt".into()),
-        b'A'..=b'Z' | b'0'..=b'9' => Some((vk as char).to_string()),
-        _ => None,
-    }
-}
+// KBM keybind capture removed.
 
 
 unsafe fn dump_ui_tabs(out_dir: &std::path::Path) {
@@ -3124,7 +3114,7 @@ unsafe fn dump_ui_tabs(out_dir: &std::path::Path) {
     let playtime_label = format!("PLAYTIME {} ({} RUNS)", telemetry::format_playtime(ps), pc);
     let shader_census = ShaderCensus::default();
 
-    for view in 0..=6 {
+    for view in 0..=4 {
         let ctx = RenderContext {
             settings: &settings,
             sys: &sys,
@@ -3162,8 +3152,7 @@ unsafe fn dump_ui_tabs(out_dir: &std::path::Path) {
             commit_history: &commit_history,
             recent_sessions: &recent_sessions,
             proc_stats: None,
-            listening_keybind: None,
-            shader_census: &shader_census,
+                        shader_census: &shader_census,
             census_running: false,
             last_crash: None,
             dismissed_warning: None,
@@ -3179,6 +3168,9 @@ unsafe fn dump_ui_tabs(out_dir: &std::path::Path) {
             cache_hash_mismatch: false,
             beats_baseline: false,
             show_shortcuts: false,
+            diag_sub: 0,
+            settings_sub: 0,
+            update_available: false,
         };
         let _ = paint(mem, w, h, &ctx);
         let px_bytes = (w as usize) * (h as usize) * 4;

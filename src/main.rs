@@ -6,7 +6,6 @@ mod config;
 mod diagnostics;
 mod guardian;
 mod hud;
-mod keymap;
 mod launcher;
 mod monitor;
 mod portwatch;
@@ -19,6 +18,7 @@ mod saves;
 mod shader_heal;
 mod telemetry;
 mod ui;
+mod update_check;
 mod vram_guard;
 mod win32;
 

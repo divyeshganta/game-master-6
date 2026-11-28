@@ -72,7 +72,7 @@ pub fn launch_clone_and_build(repo: &str, name: &str) -> Result<(), String> {
     let ps_script = format!(
         "$ErrorActionPreference = 'Stop'\n\
          Write-Host '============================================================' -ForegroundColor Cyan\n\
-         Write-Host '  Game Master 6 v1.3 — Safe Auto-Builder ({safe_name})' -ForegroundColor Magenta\n\
+         Write-Host '  Game GameMaster6 v15.2 — Safe Auto-Builder ({safe_name})' -ForegroundColor Magenta\n\
          Write-Host '  Repo: {clone_url}' -ForegroundColor Gray\n\
          Write-Host '============================================================' -ForegroundColor Cyan\n\
          $repoDir = '{repo_dir}'\n\
@@ -223,7 +223,7 @@ pub static D3D12SDKPath: &[u8; 9] = &[0x2E, 0x5C, 0x44, 0x33, 0x44, 0x31, 0x32, 
              Write-Host ('  -> Wrote runner-meta.json & .gm-meta (' + $commitSha + ')') -ForegroundColor Green\n\
          }}\n\
          Write-Host ''\n\
-         Write-Host '[DONE] Game Master will auto-refresh the Hub to UP TO DATE (or click RESCAN).' -ForegroundColor Green\n\
+         Write-Host '[DONE] GameMaster6 will auto-refresh the Hub to UP TO DATE (or click RESCAN).' -ForegroundColor Green\n\
          Read-Host 'Press Enter to close'\n",
         safe_name = safe_name,
         clone_url = clone_url,
@@ -241,7 +241,7 @@ pub static D3D12SDKPath: &[u8; 9] = &[0x2E, 0x5C, 0x44, 0x33, 0x44, 0x31, 0x32, 
         .args([
             "/C",
             "start",
-            "Game Master Safe Auto-Builder",
+            "GameMaster6 Safe Auto-Builder",
             "powershell",
             "-NoProfile",
             "-ExecutionPolicy",
@@ -332,7 +332,7 @@ pub fn launch_update_runner(exe_path: &std::path::Path, game_dir: &str) -> Resul
     );
     fs::write(&script_path, ps).map_err(|e| format!("Could not write update script: {e}"))?;
     Command::new("cmd")
-        .args(["/C", "start", "Game Master Runner Updater", "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_path.to_string_lossy()])
+        .args(["/C", "start", "GameMaster6 Runner Updater", "powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", &script_path.to_string_lossy()])
         .spawn()
         .map_err(|e| format!("Failed to launch updater: {e}"))?;
     Ok(())

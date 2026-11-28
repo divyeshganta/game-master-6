@@ -1,5 +1,5 @@
-//! Portable Community Profile Export / Import (`.gmprofile`) for v1.2
-//! Allows sharing hardware-tuned Baseline presets, Advanced flags, HUD mode, and keymaps.
+//! Portable Community Profile Export / Import (`.gmprofile`) for v15.2
+//! Allows sharing hardware-tuned victory presets, Advanced flags, and HUD mode.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -22,7 +22,7 @@ pub fn export_profile(s: &Settings, name: &str) -> Result<PathBuf, String> {
     };
     let dest = dir.join(format!("{stem}.gmprofile"));
     let body = format!(
-        "# Game Master 6 v1.2 Portable Profile\n\
+        "# Game GameMaster6 v15.2 Portable Profile\n\
          active_preset={}\n\
          console={}\n\
          display_mode={}\n\
@@ -58,8 +58,6 @@ pub fn export_profile(s: &Settings, name: &str) -> Result<PathBuf, String> {
          ambient_air={}\n\
          bvh_builder={}\n\
          hud_mode={}\n\
-         keymap_preset={}\n\
-         keymap={}\n\
          custom_env={}\n",
         s.active_preset.trim(),
         s.console_model.trim(),
@@ -96,8 +94,6 @@ pub fn export_profile(s: &Settings, name: &str) -> Result<PathBuf, String> {
         s.ambient_air.trim(),
         if s.bvh_builder { "1" } else { "0" },
         s.hud_mode,
-        s.keymap_preset.trim(),
-        s.keymap.trim(),
         s.custom_env.trim(),
     );
     fs::write(&dest, body).map_err(|e| format!("Failed to export profile: {e}"))?;
@@ -152,8 +148,6 @@ pub fn import_profile(s: &mut Settings, path: &Path) -> Result<usize, String> {
                 "ambient_air" => s.ambient_air = v.to_string(),
                 "bvh_builder" => s.bvh_builder = pb(v),
                 "hud_mode" => s.hud_mode = v.parse::<u8>().unwrap_or(1) % 3,
-                "keymap_preset" => s.keymap_preset = v.to_string(),
-                "keymap" => s.keymap = v.to_string(),
                 "custom_env" => s.custom_env = v.to_string(),
                 _ => continue,
             }

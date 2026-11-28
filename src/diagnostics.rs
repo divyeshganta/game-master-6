@@ -16,13 +16,16 @@ pub enum GpuArch {
     Unknown,
     NvidiaBlackwell,
     NvidiaAdaAmpere,
-    AmdRdna,
+    NvidiaTuringAmpere,
     Other,
 }
 
 impl GpuArch {
     pub fn is_nvidia(self) -> bool {
-        matches!(self, GpuArch::NvidiaBlackwell | GpuArch::NvidiaAdaAmpere)
+        matches!(
+            self,
+            GpuArch::NvidiaBlackwell | GpuArch::NvidiaAdaAmpere | GpuArch::NvidiaTuringAmpere
+        )
     }
 
     pub fn detect(gpu_name: &str) -> Self {
@@ -31,13 +34,31 @@ impl GpuArch {
             return GpuArch::Unknown;
         }
         if lower.contains("nvidia") || lower.contains("geforce") || lower.contains("rtx") {
-            if lower.contains("rtx 50") || lower.contains("5090") || lower.contains("5080") || lower.contains("5070") || lower.contains("5060") || lower.contains("blackwell") {
+            if lower.contains("rtx 50")
+                || lower.contains("5090")
+                || lower.contains("5080")
+                || lower.contains("5070")
+                || lower.contains("5060")
+                || lower.contains("blackwell")
+            {
                 GpuArch::NvidiaBlackwell
+            } else if lower.contains("rtx 20")
+                || lower.contains("rtx 30")
+                || lower.contains("2060")
+                || lower.contains("2070")
+                || lower.contains("2080")
+                || lower.contains("3050")
+                || lower.contains("3060")
+                || lower.contains("3070")
+                || lower.contains("3080")
+                || lower.contains("3090")
+                || lower.contains("turing")
+                || lower.contains("ampere")
+            {
+                GpuArch::NvidiaTuringAmpere
             } else {
                 GpuArch::NvidiaAdaAmpere
             }
-        } else if lower.contains("amd") || lower.contains("radeon") || lower.contains("rx ") {
-            GpuArch::AmdRdna
         } else {
             GpuArch::Other
         }
@@ -46,10 +67,10 @@ impl GpuArch {
     pub fn label(self) -> &'static str {
         match self {
             GpuArch::Unknown => "Auto",
-            GpuArch::NvidiaBlackwell => "NVIDIA Blackwell",
-            GpuArch::NvidiaAdaAmpere => "NVIDIA Ada/Ampere",
-            GpuArch::AmdRdna => "AMD RDNA",
-            GpuArch::Other => "Generic GPU",
+            GpuArch::NvidiaBlackwell => "NVIDIA RTX 50 (Blackwell)",
+            GpuArch::NvidiaAdaAmpere => "NVIDIA RTX 40 (Ada)",
+            GpuArch::NvidiaTuringAmpere => "NVIDIA RTX 20/30",
+            GpuArch::Other => "Non-NVIDIA GPU",
         }
     }
 }
@@ -419,7 +440,7 @@ fn friendly_proc_name(exe: &str) -> Option<String> {
         "runtimebroker", "shellexperiencehost", "startmenuexperiencehost", "textinputhost",
         "taskhostw", "ctfmon", "conhost", "audiodg", "spoolsv", "msmpeng", "nissrv",
         "securityhealthservice", "wmiprvse", "tasklist", "gamemaster", "game master",
-        "victory", "victory-diag", "gamerunner", "game_console_master", "sihost", "dllhost",
+        "victory", "victory-diag", "gamerunner", "game_native_master", "sihost", "dllhost",
         "dashost", "wlanext", "spoolsv", "nvcontainer", "nvdisplay.container",
     ];
     if base.is_empty() || IGNORE.contains(&base) {
@@ -441,7 +462,7 @@ fn friendly_proc_name(exe: &str) -> Option<String> {
     Some(nice.to_string())
 }
 
-/// Probes top memory-consuming user processes (excluding system processes and Game Master).
+/// Probes top memory-consuming user processes (excluding system processes and GameMaster6).
 pub fn probe_top_ram_apps() -> Vec<(String, f64)> {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x08000000;
@@ -720,7 +741,7 @@ pub fn export_report(s: &Settings, sys: &SystemInfo, audit: &AssetAudit, data_la
     let path = dir.join(format!("system-report-{}.txt", local_timestamp_filename()));
     let mut out = String::new();
     out.push_str("============================================================\n");
-    out.push_str("  Game Master 6 - GAME MASTER v1.2  |  LOCAL SYSTEM REPORT\n");
+    out.push_str("  Game - GAME MASTER v15.2  |  LOCAL SYSTEM REPORT\n");
     out.push_str("============================================================\n");
     out.push_str(&format!("Generated       : {}\n", local_timestamp_human()));
     out.push_str(&format!("App Directory   : {}\n", Settings::app_dir().display()));
@@ -936,7 +957,7 @@ pub fn export_ai_debug_bundle(
     let dir = reports_dir();
     let path = dir.join(format!("ai-debug-bundle-{}.md", local_timestamp_filename()));
     let mut out = String::new();
-    out.push_str("# Game Master 6 v1.2 — AI Debug Bundle\n\n");
+    out.push_str("# Game GameMaster6 v15.2 — AI Debug Bundle\n\n");
     out.push_str(&format!("- **Generated:** {}\n", local_timestamp_human()));
     out.push_str(&format!("- **Build:** {} ({})\n", s.version_label(), data_label));
     out.push_str(&format!("- **Runner:** `{}` ({})\n", s.resolved_runner().display(), s.active_runner_kind().badge()));

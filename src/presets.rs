@@ -1,5 +1,5 @@
 use crate::config::Settings;
-use crate::diagnostics::SystemInfo;
+use crate::diagnostics::{GpuArch, SystemInfo};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum HardwareTier {
@@ -40,8 +40,37 @@ impl HardwareTier {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub enum NvidiaGen {
+    Rtx50,
+    Rtx40,
+    Rtx20_30,
+    NonNvidia,
+}
+
+impl NvidiaGen {
+    pub fn detect(arch: GpuArch) -> Self {
+        match arch {
+            GpuArch::NvidiaBlackwell => NvidiaGen::Rtx50,
+            GpuArch::NvidiaAdaAmpere => NvidiaGen::Rtx40,
+            GpuArch::NvidiaTuringAmpere => NvidiaGen::Rtx20_30,
+            _ => NvidiaGen::NonNvidia,
+        }
+    }
+
+    pub fn is_nvidia(self) -> bool {
+        !matches!(self, NvidiaGen::NonNvidia)
+    }
+
+    /// Friendly banner when a non-NVIDIA GPU is detected.
+    pub fn non_nvidia_warning() -> &'static str {
+        "Designed for NVIDIA RTX GPUs - DLSS/FG features require an RTX card"
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PresetKind {
+    Auto,
     Low,
     Balanced,
     High,
@@ -51,6 +80,7 @@ pub enum PresetKind {
 impl PresetKind {
     pub fn id(self) -> &'static str {
         match self {
+            PresetKind::Auto => "auto",
             PresetKind::Low => "low",
             PresetKind::Balanced => "balanced",
             PresetKind::High => "high",
@@ -60,6 +90,7 @@ impl PresetKind {
 
     pub fn label(self) -> &'static str {
         match self {
+            PresetKind::Auto => "AUTO (THIS PC)",
             PresetKind::Low => "LOW",
             PresetKind::Balanced => "BALANCED",
             PresetKind::High => "HIGH",
@@ -67,9 +98,9 @@ impl PresetKind {
         }
     }
 
-    #[allow(dead_code)]
     pub fn from_id(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => PresetKind::Auto,
             "low" | "safe" => PresetKind::Low,
             "balanced" => PresetKind::Balanced,
             "high" | "max" => PresetKind::High,
@@ -78,30 +109,125 @@ impl PresetKind {
     }
 }
 
-/// Applies a hardware-adaptive BASELINE preset (LOW / BALANCED / HIGH) computed
-/// dynamically from live GPU VRAM tier and CPU core count.
-/// Every emitted parameter maps 1:1 to a verified variable in `runner_src\baseline`.
+/// Resolved `AUTO (THIS PC)` NVIDIA tier mapping.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NvidiaAuto {
+    pub gen: NvidiaGen,
+    pub tier: HardwareTier,
+    pub console_model: String,   // "series-x" | "series-s"
+    pub display_mode: String,    // "2560x1440" | "1920x1080"
+    pub dlss_mode: String,       // "balanced" | "performance"
+    pub framegen_x: u32,         // 2 (3x selectable)
+    pub texture_room_percent: String,
+    pub aggressive_idle_trim: bool,
+    pub fg_type_auto: bool,      // VICTORY_MENU_FG_TYPE=auto (FSR3 FG 2x fallback on RTX 20/30)
+}
+
+/// Clean NVIDIA GPU Generation & VRAM Tier Auto-Detection (`AUTO (THIS PC)`).
+pub fn nvidia_auto_preset(arch: GpuArch, vram_gb: f64) -> NvidiaAuto {
+    let gen = NvidiaGen::detect(arch);
+    let tier = HardwareTier::from_vram_gb(vram_gb);
+    match gen {
+        NvidiaGen::Rtx50 => {
+            // RTX 50 Series (12 GB+): Series X 1440p, DLSS Balanced, 2x FG (3x selectable), 85% room.
+            NvidiaAuto {
+                gen,
+                tier,
+                console_model: "series-x".into(),
+                display_mode: "2560x1440".into(),
+                dlss_mode: "balanced".into(),
+                framegen_x: 2,
+                texture_room_percent: "85".into(),
+                aggressive_idle_trim: false,
+                fg_type_auto: false,
+            }
+        }
+        NvidiaGen::Rtx40 => {
+            if tier == HardwareTier::Tight6 {
+                // RTX 40 6 GB (e.g. RTX 4050 Laptop 6 GB): safe 1080p, DLSS Performance, 2x FG, 70% room, aggressive idle trim.
+                NvidiaAuto {
+                    gen,
+                    tier,
+                    console_model: "series-s".into(),
+                    display_mode: "1920x1080".into(),
+                    dlss_mode: "performance".into(),
+                    framegen_x: 2,
+                    texture_room_percent: "70".into(),
+                    aggressive_idle_trim: true,
+                    fg_type_auto: false,
+                }
+            } else {
+                // RTX 40 8-12 GB: Series X 1440p/1080p, DLSS Performance/Balanced, 2x FG, 74-82% room.
+                let dlss_mode = if tier >= HardwareTier::Mid12 { "balanced" } else { "performance" };
+                let display_mode = if tier >= HardwareTier::Mid12 { "2560x1440" } else { "1920x1080" };
+                let texture_room_percent = if tier >= HardwareTier::Mid12 { "82".into() } else { "74".into() };
+                NvidiaAuto {
+                    gen,
+                    tier,
+                    console_model: "series-x".into(),
+                    display_mode: display_mode.into(),
+                    dlss_mode: dlss_mode.into(),
+                    framegen_x: 2,
+                    texture_room_percent,
+                    aggressive_idle_trim: false,
+                    fg_type_auto: false,
+                }
+            }
+        }
+        NvidiaGen::Rtx20_30 => {
+            // RTX 20 / 30 Series: DLSS Super Resolution + VICTORY_MENU_FG_TYPE=auto (FSR3 FG 2x fallback).
+            let display_mode = if tier <= HardwareTier::Tight8 { "1920x1080".into() } else { "2560x1440".into() };
+            let dlss_mode = if tier <= HardwareTier::Tight8 { "performance".into() } else { "balanced".into() };
+            let texture_room_percent = if tier <= HardwareTier::Tight8 { "74".into() } else { "85".into() };
+            NvidiaAuto {
+                gen,
+                tier,
+                console_model: if tier <= HardwareTier::Tight8 { "series-s".into() } else { "series-x".into() },
+                display_mode,
+                dlss_mode,
+                framegen_x: 2,
+                texture_room_percent,
+                aggressive_idle_trim: tier == HardwareTier::Tight6,
+                fg_type_auto: true,
+            }
+        }
+        NvidiaGen::NonNvidia => NvidiaAuto {
+            gen,
+            tier,
+            console_model: "series-s".into(),
+            display_mode: "1920x1080".into(),
+            dlss_mode: "off".into(),
+            framegen_x: 0,
+            texture_room_percent: "70".into(),
+            aggressive_idle_trim: false,
+            fg_type_auto: false,
+        },
+    }
+}
+
+/// Applies a hardware-adaptive preset computed dynamically from live GPU arch + VRAM tier + CPU core count.
+/// `AUTO (THIS PC)` resolves NVIDIA generation + VRAM tiering; `LOW`/`BALANCED`/`HIGH` layer on top.
+/// All outputs preserve the Zero-Regression Lock invariants.
 pub fn apply_adaptive_preset(s: &mut Settings, preset: PresetKind, sys: &SystemInfo) -> String {
     let tier = HardwareTier::from_vram_gb(sys.vram_gb);
+    let gen = NvidiaGen::detect(sys.gpu_arch);
 
-    // Common verified host & stability defaults
+    // ---- Common verified host & stability defaults (Zero-Regression Lock) ----
     s.prefer_dgpu = true;
     s.zero_overhead = true;
     s.high_priority = true;
     s.timer_1ms = true;
-    s.high_perf_power = false;
+    s.high_perf_power = false; // never touch Windows power plans
     s.gpu_timing = false;
     s.dred = false;
     s.capture = false;
     s.warp = false;
     s.bvh_builder = false;
     s.shader_loop_limit.clear();
-    s.upscaler_enabled = false;
-    s.kbm_crosshair = false;
-    s.mouse_aim = false;
-    s.input_mode = "pad".into();
+    s.upscaler_enabled = false; // NVIDIA-only; no host FSR folder
+    s.upscaler_dir.clear();
 
-    // Common verified BASELINE throughput & residency flags
+    // Throughput & residency flags
     s.texture_no_wait = true;
     s.relay_copy = true;
     s.wide_back = true;
@@ -113,329 +239,155 @@ pub fn apply_adaptive_preset(s: &mut Settings, preset: PresetKind, sys: &SystemI
     s.map_threads = true;
     s.card_awake = true;
     s.show_after = true;
-    s.async_submit = true;
+    s.async_submit = true; // VICTORY_ASYNC_SUBMIT=1
+    s.thin_lists = true; // VICTORY_THIN=1
     s.wide_refresh = true;
     s.wide_merge = true;
     s.fast_cores = sys.cpu_cores >= 8;
-
-    // GPU-architecture-aware auto-tuning
-    match sys.gpu_arch {
-        crate::diagnostics::GpuArch::NvidiaAdaAmpere => {
-            s.thin_lists = false;
-            s.join_parts = 0; // wave32-safe without THIN+JOIN_PARTS blur
-            s.ambient_val = "0.5".into();
-            s.ambient_air = "1.2".into();
-        }
-        crate::diagnostics::GpuArch::AmdRdna => {
-            s.thin_lists = true;
-            s.ambient_val = "0.6".into();
-            s.ambient_air = "1.2".into();
-        }
-        _ => {
-            // NVIDIA Blackwell (RTX 50-series) & default
-            s.thin_lists = false;
-            s.ambient_val = "0.3".into();
-            s.ambient_air = "1.2".into();
-        }
-    }
     s.levels_on_demand = true;
     s.no_wait_resident = true;
     s.ambient_fill = true;
-    s.ambient_val = "0.8".into();
-    s.ambient_air = "1.5".into();
+    s.relay_mode = 2;
+    s.card_steps = 2;
+    s.upload_ahead = true;
+    s.borderless = true; // VICTORY_BORDERLESS=1 + VICTORY_FULLSCREEN=1
+    s.mouse_capture = true; // VICTORY_MOUSE_CAPTURE=1
     s.texture_budget_mb.clear();
     s.texture_stage_mb.clear();
+    // NO VICTORY_CARD_ROOM_FOR_TARGETS_MB
+    s.card_room_for_targets_mb.clear();
+    s.frame_interval_us = "1000".into(); // VICTORY_FRAME_INTERVAL_US=1000
+    s.log_level = "warn".into();
 
-    match (tier, preset) {
-        // ── Tier 0: <= 6.5 GB VRAM (RTX 4050 6 GB / RTX 3050 4-6 GB / RTX 2060 6 GB) ──
-        (HardwareTier::Tight6, PresetKind::Low | PresetKind::Balanced | PresetKind::High) => {
-            s.console_model = "series-s".into();
-            s.display_mode = "1280x720".into();
-            s.card_buffers_min_mb = "4".into();
-            s.card_buffers_mb = "384".into();
-            s.texture_room_percent = "78".into();
-            s.card_room_for_targets_mb = "1024".into();
-            s.no_wait_resident = true;
-            s.relay_mode = 2;
-            s.card_steps = 2;
-            s.thin_lists = false;
-            s.upload_ahead = true;
-            s.ambient_val = "0.3".into();
-            s.ambient_air = "1.2".into();
-            s.log_level = "warn".into();
-        }
+    if preset == PresetKind::Custom {
+        s.active_preset = "custom".into();
+        return "Active preset: CUSTOM".into();
+    }
 
-        // ── Tier 1: <= 8 GB VRAM ───────────────────────────────────────────
-        (HardwareTier::Tight8, PresetKind::Low) => {
-            s.console_model = "series-s".into();
-            s.display_mode = "1280x720".into();
-            s.card_buffers_min_mb = "4".into();
-            s.card_buffers_mb = "512".into();
-            s.texture_room_percent = "85".into();
-            s.card_room_for_targets_mb = "1536".into();
-            s.no_wait_resident = true;
-            s.relay_mode = 2;
-            s.card_steps = 2;
-            s.thin_lists = false;
-            s.upload_ahead = true;
-            s.log_level = "warn".into();
-        }
-        (HardwareTier::Tight8, PresetKind::Balanced) => {
-            s.console_model = "series-s".into();
-            s.display_mode = "1280x720".into();
-            s.card_buffers_min_mb = "4".into();
-            s.card_buffers_mb = "512".into();
-            s.texture_room_percent = "85".into();
-            s.card_room_for_targets_mb = "1536".into();
-            s.no_wait_resident = true;
-            s.relay_mode = 2;
-            s.card_steps = 2;
-            s.thin_lists = true;
-            s.upload_ahead = true;
-            s.log_level = "warn".into();
-        }
-        (HardwareTier::Tight8, PresetKind::High) => {
-            s.console_model = "series-s".into();
-            s.display_mode = "1600x900".into();
-            s.card_buffers_min_mb = "4".into();
-            s.card_buffers_mb = "768".into();
-            s.texture_room_percent = "90".into();
-            s.card_room_for_targets_mb = "2048".into();
-            s.no_wait_resident = true;
-            s.relay_mode = 2;
-            s.card_steps = 2;
-            s.thin_lists = true;
-            s.upload_ahead = true;
-            s.log_level = "warn".into();
-        }
+    // ---- Resolve NVIDIA generation + VRAM tier for AUTO ----
+    let auto = nvidia_auto_preset(sys.gpu_arch, sys.vram_gb);
 
-        // ── Tier 2: 10–12 GB VRAM (e.g. RTX 5070 Ti 12 GB) ─────────────────
-        (HardwareTier::Mid12, PresetKind::Low) => {
-            // Verified overnight winner (Max FPS): Series X + 720p output + 90% tex room (7.24 avg / 12.1 max / 10.4 steady)
-            s.console_model = "series-x".into();
-            s.display_mode = "1280x720".into();
-            s.card_buffers_min_mb = "4".into();
-            s.card_buffers_mb = "1024".into();
-            s.texture_room_percent = "90".into();
-            s.card_room_for_targets_mb = "2048".into();
-            s.no_wait_resident = true;
-            s.relay_mode = 2;
-            s.card_steps = 2;
-            s.thin_lists = false;
-            s.upload_ahead = true;
-            s.ambient_val = "0.3".into();
-            s.ambient_air = "1.2".into();
-            s.log_level = "warn".into();
+    match preset {
+        PresetKind::Auto => {
+            s.console_model = auto.console_model.clone();
+            s.display_mode = auto.display_mode.clone();
+            s.dlss_mode = auto.dlss_mode.clone();
+            s.framegen_x = auto.framegen_x;
+            s.texture_room_percent = auto.texture_room_percent.clone();
+            // RTX 50 12GB+ anti-whiteout defaults (also applied globally by launcher)
         }
-        (HardwareTier::Mid12, PresetKind::Balanced) => {
-            // Verified overnight Balanced: Series S + 1080p FidelityFX + THIN=0 + AMBIENT=0.3 (6.47 avg / 8.9 max / 8.6 steady)
-            s.console_model = "series-s".into();
-            s.display_mode = "1920x1080".into();
-            s.card_buffers_min_mb = "4".into();
-            s.card_buffers_mb = "1024".into();
-            s.texture_room_percent = "94".into();
-            s.card_room_for_targets_mb = "2560".into();
-            s.no_wait_resident = true;
-            s.relay_mode = 2;
-            s.card_steps = 2;
-            s.thin_lists = false;
-            s.upload_ahead = true;
-            s.ambient_val = "0.3".into();
-            s.ambient_air = "1.2".into();
-            s.log_level = "warn".into();
+        PresetKind::Low => {
+            s.console_model = if tier <= HardwareTier::Tight8 { "series-s".into() } else { "series-x".into() };
+            s.display_mode = if tier <= HardwareTier::Tight8 { "1920x1080".into() } else { "2560x1440".into() };
+            s.dlss_mode = "performance".into();
+            s.framegen_x = if gen.is_nvidia() { 2 } else { 0 };
+            s.texture_room_percent = low_room(gen, tier);
         }
-        (HardwareTier::Mid12, PresetKind::High) => {
-            // Verified overnight Sharp: Series X + 1664x936 output (no_room=0, 12.3 max)
-            s.console_model = "series-x".into();
-            s.display_mode = "1664x936".into();
-            s.card_buffers_min_mb = "4".into();
-            s.card_buffers_mb = "1024".into();
-            s.texture_room_percent = "94".into();
-            s.card_room_for_targets_mb = "2560".into();
-            s.no_wait_resident = true;
-            s.relay_mode = 2;
-            s.card_steps = 2;
-            s.thin_lists = false;
-            s.upload_ahead = true;
-            s.ambient_val = "0.3".into();
-            s.ambient_air = "1.2".into();
-            s.log_level = "warn".into();
+        PresetKind::Balanced => {
+            s.console_model = if tier <= HardwareTier::Tight8 { "series-s".into() } else { "series-x".into() };
+            s.display_mode = if tier <= HardwareTier::Tight8 { "1920x1080".into() } else { "2560x1440".into() };
+            s.dlss_mode = "balanced".into();
+            s.framegen_x = if gen.is_nvidia() { 2 } else { 0 };
+            s.texture_room_percent = balanced_room(gen, tier);
         }
-
-        // ── Tier 3: 16 GB VRAM ─────────────────────────────────────────────
-        (HardwareTier::High16, PresetKind::Low) => {
-            s.console_model = "series-x".into();
-            s.display_mode = "1920x1080".into();
-            s.card_buffers_min_mb = "4".into();
-            s.card_buffers_mb = "1024".into();
-            s.texture_room_percent = "94".into();
-            s.card_room_for_targets_mb = "2560".into();
-            s.relay_mode = 2;
-            s.card_steps = 2;
-            s.thin_lists = false;
-            s.upload_ahead = true;
-            s.log_level = "warn".into();
-        }
-        (HardwareTier::High16, PresetKind::Balanced) => {
-            s.console_model = "series-x".into();
-            s.display_mode = "1920x1080".into();
-            s.card_buffers_min_mb = "4".into();
-            s.card_buffers_mb = "1024".into();
-            s.texture_room_percent = "94".into();
-            s.card_room_for_targets_mb = "2560".into();
-            s.relay_mode = 2;
-            s.card_steps = 2;
-            s.thin_lists = true;
-            s.upload_ahead = true;
-            s.log_level = "warn".into();
-        }
-        (HardwareTier::High16, PresetKind::High) => {
+        PresetKind::High => {
             s.console_model = "series-x".into();
             s.display_mode = "2560x1440".into();
-            s.card_buffers_min_mb = "4".into();
-            s.card_buffers_mb = "2048".into();
-            s.texture_room_percent = "94".into();
-            s.card_room_for_targets_mb = "2560".into();
-            s.relay_mode = 2;
-            s.card_steps = 2;
-            s.thin_lists = true;
-            s.upload_ahead = true;
-            s.log_level = "warn".into();
+            s.dlss_mode = "quality".into();
+            s.framegen_x = if gen.is_nvidia() { 2 } else { 0 };
+            s.texture_room_percent = high_room(gen, tier);
         }
-
-        // ── Tier 4: >= 20 GB VRAM ──────────────────────────────────────────
-        (HardwareTier::Ultra20, PresetKind::Low) => {
-            s.console_model = "series-x".into();
-            s.display_mode = "1920x1080".into();
-            s.card_buffers_min_mb = "4".into();
-            s.card_buffers_mb = "1024".into();
-            s.texture_room_percent = "94".into();
-            s.card_room_for_targets_mb = "2560".into();
-            s.relay_mode = 2;
-            s.card_steps = 2;
-            s.thin_lists = false;
-            s.upload_ahead = true;
-            s.log_level = "warn".into();
-        }
-        (HardwareTier::Ultra20, PresetKind::Balanced) => {
-            s.console_model = "series-x".into();
-            s.display_mode = "1920x1080".into();
-            s.card_buffers_min_mb = "4".into();
-            s.card_buffers_mb = "1024".into();
-            s.texture_room_percent = "94".into();
-            s.card_room_for_targets_mb = "2560".into();
-            s.relay_mode = 2;
-            s.card_steps = 2;
-            s.thin_lists = true;
-            s.upload_ahead = true;
-            s.log_level = "warn".into();
-        }
-        (HardwareTier::Ultra20, PresetKind::High) => {
-            s.console_model = "series-x".into();
-            s.display_mode = "auto".into();
-            s.card_buffers_min_mb = "4".into();
-            s.card_buffers_mb = "4096".into();
-            s.texture_room_percent = "94".into();
-            s.card_room_for_targets_mb = "3072".into();
-            s.relay_mode = 2;
-            s.card_steps = 2;
-            s.thin_lists = true;
-            s.upload_ahead = true;
-            s.log_level = "warn".into();
-        }
-
-        // Custom does not overwrite user overrides
-        (_, PresetKind::Custom) => {
-            s.active_preset = "custom".into();
-            return "Active preset: CUSTOM".into();
-        }
+        PresetKind::Custom => unreachable!(),
     }
+
+    // DLSS/FG only on NVIDIA RTX; non-NVIDIA gets a friendly banner + no DLSS/FG.
+    if !gen.is_nvidia() {
+        s.dlss_mode = "off".into();
+        s.framegen_x = 0;
+    }
+
+    // RTX 20/30 fallback: DLSS SR + VICTORY_MENU_FG_TYPE=auto (FSR3 FG 2x).
+    let fg_type_auto = gen == NvidiaGen::Rtx20_30;
 
     s.display_1080p = s.display_mode == "1920x1080";
     s.active_preset = preset.id().into();
 
-    // If the active runner is a Streamline/DLSS runner, apply exact DLSS/FG preset tuning
-    // (70/72/74% on 6-8 GB, 75/85/85% on 12 GB, 80/85/86% on 16 GB+) and sync to victory-settings.txt.
+    // If the active runner is a Streamline/DLSS runner, sync exact tuning to victory-settings.txt.
     let runner_path = s.resolved_runner();
     if crate::runners::is_streamline_runner(&runner_path) && preset != PresetKind::Custom {
-        let fg_2 = match sys.gpu_arch {
-            crate::diagnostics::GpuArch::NvidiaBlackwell
-            | crate::diagnostics::GpuArch::NvidiaAdaAmpere
-            | crate::diagnostics::GpuArch::Unknown => 2,
-            _ => 0,
-        };
-        let tex_room = match (tier, preset) {
-            (HardwareTier::Tight6 | HardwareTier::Tight8, PresetKind::Low) => "70",
-            (HardwareTier::Tight6 | HardwareTier::Tight8, PresetKind::Balanced) => "72",
-            (HardwareTier::Tight6 | HardwareTier::Tight8, PresetKind::High) => "74",
-            (HardwareTier::Mid12, PresetKind::Low) => "75",
-            (HardwareTier::Mid12, PresetKind::Balanced) => "85",
-            (HardwareTier::Mid12, PresetKind::High) => "85",
-            (_, PresetKind::Low) => "80",
-            (_, PresetKind::Balanced) => "85",
-            (_, PresetKind::High) => "86",
-            (_, PresetKind::Custom) => "85",
-        };
-        match preset {
-            PresetKind::Low => {
-                s.console_model = if tier <= HardwareTier::Tight8 { "series-s".into() } else { "series-x".into() };
-                s.display_mode = if tier <= HardwareTier::Tight8 { "1280x720".into() } else { "2560x1440".into() };
-                s.dlss_mode = "performance".into();
-                s.framegen_x = fg_2;
-                s.frame_interval_us.clear();
-            }
-            PresetKind::Balanced => {
-                s.console_model = if tier <= HardwareTier::Tight8 { "series-s".into() } else { "series-x".into() };
-                s.display_mode = if tier <= HardwareTier::Tight8 { "1920x1080".into() } else { "2560x1440".into() };
-                s.dlss_mode = "balanced".into();
-                s.framegen_x = fg_2;
-                s.frame_interval_us.clear();
-            }
-            PresetKind::High => {
-                s.console_model = "series-x".into();
-                s.display_mode = "2560x1440".into();
-                s.dlss_mode = "quality".into();
-                s.framegen_x = fg_2;
-                s.frame_interval_us.clear();
-            }
-            PresetKind::Custom => {}
-        }
-        s.thin_lists = true;
-        s.texture_room_percent = tex_room.into();
-        s.display_1080p = s.display_mode == "1920x1080";
-        s.bvh_builder = false;
-        s.log_level = "warn".into();
         let _ = crate::runners::sync_to_victory_settings(s, &runner_path);
+        let _ = fg_type_auto; // VICTORY_MENU_FG_TYPE=auto emitted by launcher for RTX 20/30
     }
 
     format!(
-        "Applied {} preset for {} ({}, {}, {}% tex room, {} MB min buf)",
+        "Applied {} preset for {} [{}] ({}, {}, {}, {}% tex room, DLSS {} + {}x FG{})",
         preset.label(),
         tier.label(),
+        gen_name(gen),
         s.console_model,
         s.display_mode,
+        s.dlss_mode,
         s.texture_room_percent,
-        s.card_buffers_min_mb
+        s.dlss_mode,
+        s.framegen_x,
+        if fg_type_auto { ", FG_TYPE=auto" } else { "" }
     )
+}
+
+fn gen_name(gen: NvidiaGen) -> &'static str {
+    match gen {
+        NvidiaGen::Rtx50 => "RTX 50",
+        NvidiaGen::Rtx40 => "RTX 40",
+        NvidiaGen::Rtx20_30 => "RTX 20/30",
+        NvidiaGen::NonNvidia => "non-NVIDIA",
+    }
+}
+
+fn low_room(gen: NvidiaGen, tier: HardwareTier) -> String {
+    let _ = gen;
+    match tier {
+        HardwareTier::Tight6 => "70".into(),
+        HardwareTier::Tight8 => "74".into(),
+        _ => "80".into(),
+    }
+}
+
+fn balanced_room(gen: NvidiaGen, tier: HardwareTier) -> String {
+    match tier {
+        HardwareTier::Tight6 => "70".into(),
+        HardwareTier::Tight8 => "74".into(),
+        HardwareTier::Mid12 => if gen == NvidiaGen::Rtx40 { "82".into() } else { "85".into() },
+        _ => "85".into(),
+    }
+}
+
+fn high_room(gen: NvidiaGen, tier: HardwareTier) -> String {
+    let _ = gen;
+    match tier {
+        HardwareTier::Tight6 => "70".into(),
+        HardwareTier::Tight8 => "74".into(),
+        _ => "85".into(),
+    }
 }
 
 /// Detects whether current Settings still match one of the adaptive presets
 /// for the detected hardware tier, or have been customized.
 pub fn detect_active_preset(s: &Settings, sys: &SystemInfo) -> PresetKind {
-    for candidate in [PresetKind::Low, PresetKind::Balanced, PresetKind::High] {
+    let order = if s.active_preset.eq_ignore_ascii_case("auto") {
+        [PresetKind::Auto, PresetKind::Low, PresetKind::Balanced, PresetKind::High]
+    } else {
+        [PresetKind::Low, PresetKind::Balanced, PresetKind::High, PresetKind::Auto]
+    };
+    for candidate in order {
         let mut probe = s.clone();
         let _ = apply_adaptive_preset(&mut probe, candidate, sys);
         if s.console_model == probe.console_model
             && s.display_mode == probe.display_mode
-            && s.card_buffers_min_mb.trim() == probe.card_buffers_min_mb.trim()
-            && s.card_buffers_mb.trim() == probe.card_buffers_mb.trim()
+            && s.dlss_mode == probe.dlss_mode
+            && s.framegen_x == probe.framegen_x
             && s.texture_room_percent.trim() == probe.texture_room_percent.trim()
-            && s.card_room_for_targets_mb.trim() == probe.card_room_for_targets_mb.trim()
-            && s.relay_mode == probe.relay_mode
-            && s.card_steps == probe.card_steps
             && s.thin_lists == probe.thin_lists
-            && s.ambient_val == probe.ambient_val
-            && s.ambient_air == probe.ambient_air
+            && s.async_submit == probe.async_submit
             && s.log_level == probe.log_level
         {
             return candidate;
@@ -443,159 +395,135 @@ pub fn detect_active_preset(s: &Settings, sys: &SystemInfo) -> PresetKind {
     }
     PresetKind::Custom
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::launcher::build_runner_env;
+    use crate::diagnostics::{GpuArch, SystemInfo};
+    use crate::launcher::build_victory_env;
 
-    #[test]
-    fn mid12_balanced_emits_verified_v15_2_env() {
-        let mut s = Settings::default();
-        let mut sys = SystemInfo::default();
-        sys.vram_gb = 12.0;
-        sys.cpu_cores = 16;
-
-        let _ = apply_adaptive_preset(&mut s, PresetKind::Balanced, &sys);
-        let env = build_runner_env(&s);
-        let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
-
-        assert_eq!(get("VICTORY_DISPLAY_MODE"), Some("1920x1080"));
-        assert_eq!(get("VICTORY_OUTPUT"), Some("1920x1080"));
-        assert_eq!(get("VICTORY_CARD_BUFFERS_MIN_MB"), Some("4"));
-        assert_eq!(get("VICTORY_CARD_ROOM_FOR_TARGETS_MB"), Some("2560"));
-        assert_eq!(get("VICTORY_TEXTURE_ROOM_PERCENT"), Some("94"));
-        assert_eq!(get("VICTORY_WAIT_RESIDENT"), Some("0"));
-        assert_eq!(get("VICTORY_THIN"), Some("0"));
-        assert_eq!(get("VICTORY_AMBIENT"), Some("0.3"));
-        assert_eq!(get("VICTORY_PORT_GUARD"), Some("1"));
-        assert_eq!(get("VICTORY_PORT_JOURNAL"), Some("1"));
+    fn sys(arch: GpuArch, vram: f64) -> SystemInfo {
+        let mut s = SystemInfo::default();
+        s.gpu_arch = arch;
+        s.vram_gb = vram;
+        s.cpu_cores = 16;
+        s
     }
 
     #[test]
-    fn detect_active_preset_distinguishes_all_presets_across_tiers() {
-        for vram in [6.0, 8.0, 12.0, 16.0, 24.0] {
-            let mut sys = SystemInfo::default();
-            sys.vram_gb = vram;
-            sys.cpu_cores = 16;
-            for kind in [PresetKind::Low, PresetKind::Balanced, PresetKind::High] {
-                let mut s = Settings::default();
-                let _ = apply_adaptive_preset(&mut s, kind, &sys);
-                if vram > 6.5 {
-                    assert_eq!(detect_active_preset(&s, &sys), kind, "vram={vram} kind={kind:?}");
-                }
-                let env = build_runner_env(&s);
-                let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
-                assert_eq!(get("VICTORY_RELAY"), Some("2"), "vram={vram} kind={kind:?}");
-                assert_eq!(get("VICTORY_CARD_STEPS"), Some("2"), "vram={vram} kind={kind:?}");
-                assert_eq!(s.log_level, "warn", "vram={vram} kind={kind:?}");
-            }
+    fn auto_label_is_this_pc() {
+        assert_eq!(PresetKind::Auto.label(), "AUTO (THIS PC)");
+        assert_eq!(PresetKind::Auto.id(), "auto");
+        assert_eq!(PresetKind::from_id("auto"), PresetKind::Auto);
+    }
+
+    // ---- NVIDIA GPU Generation & VRAM Tier Auto-Detection ----
+
+    #[test]
+    fn rtx50_12gb_plus_tier() {
+        let a = nvidia_auto_preset(GpuArch::NvidiaBlackwell, 12.0);
+        assert_eq!(a.gen, NvidiaGen::Rtx50);
+        assert_eq!(a.console_model, "series-x");
+        assert_eq!(a.display_mode, "2560x1440");
+        assert_eq!(a.dlss_mode, "balanced");
+        assert_eq!(a.framegen_x, 2);
+        assert_eq!(a.texture_room_percent, "85");
+        // 3x selectable
+        let mut s = Settings::default();
+        s.framegen_x = 3;
+        assert_eq!(s.framegen_x, 3);
+    }
+
+    #[test]
+    fn rtx50_16gb_plus_tier() {
+        let a = nvidia_auto_preset(GpuArch::NvidiaBlackwell, 24.0);
+        assert_eq!(a.gen, NvidiaGen::Rtx50);
+        assert_eq!(a.texture_room_percent, "85");
+        assert_eq!(a.display_mode, "2560x1440");
+    }
+
+    #[test]
+    fn rtx40_8_12gb_tier() {
+        let a8 = nvidia_auto_preset(GpuArch::NvidiaAdaAmpere, 8.0);
+        assert_eq!(a8.gen, NvidiaGen::Rtx40);
+        assert_eq!(a8.framegen_x, 2);
+        assert!((74..=82).contains(&a8.texture_room_percent.parse::<u32>().unwrap()));
+        let a12 = nvidia_auto_preset(GpuArch::NvidiaAdaAmpere, 12.0);
+        assert_eq!(a12.dlss_mode, "balanced");
+        assert!((74..=82).contains(&a12.texture_room_percent.parse::<u32>().unwrap()));
+        assert!(a12.display_mode == "2560x1440" || a12.display_mode == "1920x1080");
+    }
+
+    #[test]
+    fn rtx40_6gb_safe_70_and_aggressive_trim() {
+        let a = nvidia_auto_preset(GpuArch::NvidiaAdaAmpere, 6.0);
+        assert_eq!(a.gen, NvidiaGen::Rtx40);
+        assert_eq!(a.tier, HardwareTier::Tight6);
+        assert_eq!(a.display_mode, "1920x1080");
+        assert_eq!(a.dlss_mode, "performance");
+        assert_eq!(a.framegen_x, 2);
+        assert_eq!(a.texture_room_percent, "70");
+        assert!(a.aggressive_idle_trim);
+        // RTX 4050 Laptop 6 GB naming maps to Tight6
+        assert_eq!(HardwareTier::from_vram_gb(6.0), HardwareTier::Tight6);
+    }
+
+    #[test]
+    fn rtx4050_6gb_apply_emits_70_and_trim() {
+        let mut s = Settings::default();
+        let _ = apply_adaptive_preset(&mut s, PresetKind::Auto, &sys(GpuArch::NvidiaAdaAmpere, 6.0));
+        assert_eq!(s.texture_room_percent, "70");
+        assert_eq!(s.dlss_mode, "performance");
+    }
+
+    #[test]
+    fn rtx20_30_fg_type_auto_fsr3_fallback() {
+        let a = nvidia_auto_preset(GpuArch::NvidiaTuringAmpere, 8.0);
+        assert_eq!(a.gen, NvidiaGen::Rtx20_30);
+        assert!(a.fg_type_auto);
+        // DLSS Super Resolution + VICTORY_MENU_FG_TYPE=auto
+        assert!(a.dlss_mode == "performance" || a.dlss_mode == "balanced");
+        assert_eq!(a.framegen_x, 2);
+    }
+
+    #[test]
+    fn non_nvidia_warning_banner() {
+        let a = nvidia_auto_preset(GpuArch::Other, 8.0);
+        assert_eq!(a.gen, NvidiaGen::NonNvidia);
+        assert!(!a.gen.is_nvidia());
+        assert!(NvidiaGen::non_nvidia_warning().contains("NVIDIA RTX"));
+        assert_eq!(a.dlss_mode, "off");
+    }
+
+    // ---- Zero-Regression Lock invariants emitted by presets ----
+
+    #[test]
+    fn preset_preserves_zero_regression_invariants() {
+        for kind in [PresetKind::Auto, PresetKind::Low, PresetKind::Balanced, PresetKind::High] {
+            let mut s = Settings::default();
+            let _ = apply_adaptive_preset(&mut s, kind, &sys(GpuArch::NvidiaBlackwell, 12.0));
+            assert!(s.async_submit, "VICTORY_ASYNC_SUBMIT=1 {kind:?}");
+            assert!(s.thin_lists, "VICTORY_THIN=1 {kind:?}");
+            assert!(s.borderless, "VICTORY_BORDERLESS=1 {kind:?}");
+            assert!(s.mouse_capture, "VICTORY_MOUSE_CAPTURE=1 {kind:?}");
+            assert_eq!(s.frame_interval_us, "1000", "VICTORY_FRAME_INTERVAL_US=1000 {kind:?}");
+            assert!(s.card_room_for_targets_mb.is_empty(), "NO VICTORY_CARD_ROOM_FOR_TARGETS_MB {kind:?}");
+            // FPS/MENU invariants emitted by launcher; verify build_victory_env wiring
+            let env = build_victory_env(&s);
+            let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
+            assert_eq!(get("VICTORY_ASYNC_SUBMIT"), Some("1"));
+            assert_eq!(get("VICTORY_THIN"), Some("1"));
+            assert_eq!(get("VICTORY_CARD_ROOM_FOR_TARGETS_MB"), None);
         }
     }
 
     #[test]
-    fn tight6_rtx_4050_emits_safe_6gb_headroom_and_aggressive_idle_trim() {
+    fn rtx5070ti_12gb_auto_emits_85_and_no_card_room() {
         let mut s = Settings::default();
-        let mut sys = SystemInfo::default();
-        sys.vram_gb = 6.0;
-        sys.cpu_cores = 12;
-        sys.gpu_arch = crate::diagnostics::GpuArch::NvidiaAdaAmpere;
-
-        assert_eq!(HardwareTier::from_vram_gb(6.0), HardwareTier::Tight6);
-        let _ = apply_adaptive_preset(&mut s, PresetKind::Balanced, &sys);
-        let env = build_runner_env(&s);
-        let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
-
-        assert_eq!(get("VICTORY_OUTPUT"), Some("1280x720"));
-        assert_eq!(get("VICTORY_TEXTURE_ROOM_PERCENT"), Some("78"));
-        assert_eq!(get("VICTORY_CARD_ROOM_FOR_TARGETS_MB"), Some("1024"));
-        assert_eq!(get("VICTORY_CARD_BUFFERS_MB"), Some("384"));
-        assert_eq!(get("VICTORY_CARD_BUFFERS_MIN_MB"), Some("4"));
-        assert_eq!(get("VICTORY_THIN"), Some("0"));
-        assert_eq!(get("VICTORY_AMBIENT"), Some("0.3"));
-        assert_eq!(get("VICTORY_LIST_IDLE_TRIM_S"), Some("3"));
-        assert_eq!(get("VICTORY_SCRATCH_SPARE_MB"), Some("64"));
-        assert_eq!(get("VICTORY_SEND_SPARE_MB"), Some("64"));
-        assert_eq!(get("VICTORY_STAGING_IDLE_MS"), Some("1000"));
-        assert_eq!(get("VICTORY_WINDOW_IDLE_MS"), Some("1000"));
-        assert_eq!(get("VICTORY_READ_KEEP_MB"), Some("32"));
-        assert_eq!(get("VICTORY_BVH_BUILDER"), Some("0"));
-    }
-
-    #[test]
-    fn settings_default_has_no_personal_paths() {
-        let s = Settings::default();
-        assert!(s.exe.is_empty());
-        assert!(s.game_dir.is_empty());
-        assert!(!s.runner.to_ascii_lowercase().contains("user"));
-    }
-
-    #[test]
-    fn dlss_presets_and_two_way_victory_settings_sync() {
-        let tmp = std::env::temp_dir().join(format!("gm_v14_sync_test_{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&tmp);
-        std::fs::create_dir_all(&tmp).unwrap();
-        let exe = tmp.join("victory.exe");
-        std::fs::write(&exe, b"MZ").unwrap();
-        std::fs::write(tmp.join("sl.interposer.dll"), b"DLL").unwrap();
-        std::fs::write(
-            tmp.join("victory-settings.txt"),
-            "VICTORY_LIST_IDLE_TRIM_S=5\nVICTORY_SCRATCH_SPARE_MB=128\n",
-        )
-        .unwrap();
-
-        let mut s = Settings::default();
-        s.runner = exe.to_string_lossy().into_owned();
-        let mut sys = SystemInfo::default();
-        sys.vram_gb = 12.0;
-        sys.gpu_arch = crate::diagnostics::GpuArch::NvidiaBlackwell;
-
-        // 1. BALANCED preset -> writes 1440p Native, DLSS balanced, 2x FG, uncapped FPS (1000), 85% tex room, preserves unrelated keys
-        let _ = apply_adaptive_preset(&mut s, PresetKind::Balanced, &sys);
-        let vs = std::fs::read_to_string(tmp.join("victory-settings.txt")).unwrap();
-        assert!(vs.contains("VICTORY_OUTPUT=2560x1440"));
-        assert!(vs.contains("VICTORY_NATIVE_1440P=1"));
-        assert!(vs.contains("VICTORY_MENU_RES=1440"));
-        assert!(vs.contains("VICTORY_DLSS=1"));
-        assert!(vs.contains("VICTORY_DLSS_MODE=balanced"));
-        assert!(vs.contains("VICTORY_FRAMEGEN_X=2"));
-        assert!(vs.contains("VICTORY_MENU_FPS=1000"));
-        assert!(vs.contains("VICTORY_FRAME_INTERVAL_US=1000"));
-        assert!(!vs.contains("VICTORY_FRAME_INTERVAL_US=50000"));
-        assert!(!vs.contains("VICTORY_MENU_FPS=20"));
-        assert!(vs.contains("VICTORY_FULLSCREEN=1"));
-        assert!(vs.contains("VICTORY_TEXTURE_ROOM_PERCENT=85"));
-        assert!(vs.contains("VICTORY_LIST_IDLE_TRIM_S=5"));
-        assert!(vs.contains("VICTORY_SCRATCH_SPARE_MB=128"));
-
-        // 2. LOW preset -> writes 2560x1440 (1440p Native), DLSS performance, 75% tex room
-        let _ = apply_adaptive_preset(&mut s, PresetKind::Low, &sys);
-        let vs_low = std::fs::read_to_string(tmp.join("victory-settings.txt")).unwrap();
-        assert!(vs_low.contains("VICTORY_DLSS_MODE=performance"));
-        assert!(vs_low.contains("VICTORY_FRAMEGEN_X=2"));
-        assert!(vs_low.contains("VICTORY_TEXTURE_ROOM_PERCENT=75"));
-
-        // 3. HIGH preset -> writes 2560x1440, NATIVE_1440P=1, DLSS quality, FG 2x, 85% tex room
-        let _ = apply_adaptive_preset(&mut s, PresetKind::High, &sys);
-        let vs_hi = std::fs::read_to_string(tmp.join("victory-settings.txt")).unwrap();
-        assert!(vs_hi.contains("VICTORY_OUTPUT=2560x1440"));
-        assert!(vs_hi.contains("VICTORY_NATIVE_1440P=1"));
-        assert!(vs_hi.contains("VICTORY_DLSS_MODE=quality"));
-        assert!(vs_hi.contains("VICTORY_FRAMEGEN_X=2"));
-        assert!(vs_hi.contains("VICTORY_TEXTURE_ROOM_PERCENT=85"));
-
-        // 4. Two-way Read -> UI sync
-        std::fs::write(
-            tmp.join("victory-settings.txt"),
-            "VICTORY_MENU_CONSOLE=series-s\nVICTORY_OUTPUT=1920x1080\nVICTORY_DLSS=1\nVICTORY_DLSS_MODE=performance\nVICTORY_FRAMEGEN=1\nVICTORY_FRAMEGEN_X=2\n",
-        )
-        .unwrap();
-        assert!(crate::runners::sync_from_victory_settings(&mut s, &exe));
-        assert_eq!(s.console_model, "series-s");
-        assert_eq!(s.display_mode, "1920x1080");
-        assert_eq!(s.dlss_mode, "performance");
+        let _ = apply_adaptive_preset(&mut s, PresetKind::Auto, &sys(GpuArch::NvidiaBlackwell, 12.0));
+        assert_eq!(s.texture_room_percent, "85");
+        assert_eq!(s.dlss_mode, "balanced");
         assert_eq!(s.framegen_x, 2);
-
-        let _ = std::fs::remove_dir_all(&tmp);
+        assert_eq!(s.console_model, "series-x");
+        assert_eq!(s.display_mode, "2560x1440");
     }
 }

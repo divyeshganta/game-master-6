@@ -1,6 +1,6 @@
 [package]
 name = "GameMaster6"
-version = "1.5.1"
+version = "1.6.0"
 edition = "2021"
 description = "Hardware-adaptive Windows GUI launcher, multi-runner manager, VRAM-tier preset tuner, and live RAM/commit diagnostics for compatibility runners."
 
@@ -14,3 +14,6 @@ lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[dependencies]
+zip = { version = "0.6.6", default-features = false, features = ["deflate"] }

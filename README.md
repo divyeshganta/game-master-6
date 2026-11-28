@@ -2,14 +2,14 @@
 
 <img src="assets/banner.png" alt="Game Master 6 Banner" width="100%" />
 
-# Game Master 6 (v1.5.1)
+# Game Master 6 (v1.6.0)
 
-**A lightweight, zero-dependency Windows GUI launcher, hardware-adaptive VRAM preset manager, and live system telemetry frontend for `victory.exe` compatibility runners.**
+**A lightweight, lightweight Windows GUI launcher, hardware-adaptive VRAM preset manager, and live system telemetry frontend for `victory.exe` compatibility runners.**
 
 [![Platform](https://img.shields.io/badge/Platform-Windows%2010%2F11%20x64-00e5ff?style=for-the-badge&logo=windows)](https://github.com)
 [![Built with](https://img.shields.io/badge/Built%20with-Rust%20%2B%20Win32%20GDI-ff2e93?style=for-the-badge&logo=rust)](https://www.rust-lang.org/)
 [![License](https://img.shields.io/badge/License-GPL--3.0-22c55e?style=for-the-badge)](LICENSE)
-[![Latest Release](https://img.shields.io/badge/Release-v1.5.1-f59e0b?style=for-the-badge)](GameMaster6-v1.5.1-Release.zip)
+[![Latest Release](https://img.shields.io/badge/Release-v1.6.0-f59e0b?style=for-the-badge)](GameMaster6-v1.6.0-Release.zip)
 
 </div>
 
@@ -17,7 +17,17 @@
 
 ---
 
-## What's New in v1.5.1
+## What's New in v1.6.0
+
+## v1.6.0 - Clean NVIDIA-Only UI, AUTO (THIS PC) & Save Manager
+
+- **100% NVIDIA-only**: removed KBM keyboard-to-controller stand-in remapper (KEYS) and all AMD-specific runner entries; VICTORY_MOUSE_CAPTURE native keyboard/mouse toggle kept. Non-NVIDIA GPUs get a friendly banner. Primary runner 	rustno1-coder/VIctory-NVIDIA, NVIDIA forks (kelvaroq, ictory-fork, VItoriaBr), xcl-dev/xcl watchlist.
+- **5 clean tabs**: PLAY, RUNNERS, SAVES & BENCH, DIAGNOSTICS (Game Files | Live Logs + AI Debug Bundle), SETTINGS (+ Advanced). Slim 1-line status footer + LAUNCH; no yellow WARN spam on PLAY; auto-hide Auto-Doctor when healthy; 3-step first-run onboarding.
+- **AUTO (THIS PC) NVIDIA GPU generation + VRAM tiering**: RTX 50 (12 GB+) Series X 1440p DLSS Balanced 2x FG 85%; RTX 40 8-12 GB 74-82%; RTX 40 6 GB safe 1080p DLSS Performance 2x FG 70% + aggressive idle trim; RTX 20/30 DLSS SR + VICTORY_MENU_FG_TYPE=auto (FSR3 FG 2x fallback); AUTO (THIS PC) | LOW | BALANCED | HIGH. VICTORY_FULLSCREEN=1, VICTORY_BORDERLESS=1, VICTORY_ASYNC_SUBMIT=1, VICTORY_THIN=1, VICTORY_MENU_FPS=1000, VICTORY_FRAME_INTERVAL_US=1000, VICTORY_NATIVE_1440P=1, VICTORY_MENU_RES=1440, VICTORY_SHOW_NEW_LATER=0, VICTORY_TEXTURE_CATCHUP=1, VICTORY_TEXTURE_ROOM_PERCENT=85, no VICTORY_CARD_ROOM_FOR_TARGETS_MB.
+- **1-Click Save Manager** (SAVES & BENCH): detect save data dir, EXPORT SAVES (.ZIP) timestamped snapshot to ackups\saves, IMPORT / RESTORE, auto-backup before runner update; originals never modified.
+- **1-Click Update Check**: non-blocking background check on Game Master 6 releases + 	rustno1-coder/VIctory-NVIDIA upstream commits; suspended while the game runs; one-click runner update backs up saves + ictory.exe.bak, rebuilds, warms shaders.
+- **Config backward-compatible**: removed KBM/AMD fields ignore unknown keys; old settings load cleanly.
+
 
 - **Zero "Not Responding" UI Freezes**: Suspended all background hardware, VRAM, process, PortWatch, shader census, and log polling while `victory.exe` is running (keeping only a lightweight 500 ms `try_wait()` check), switched cross-process borderless fullscreen `SetWindowPos` to `SWP_ASYNCWINDOWPOS`, and removed repeated cross-process `WM_SETTEXT` branding calls.
 - **Clean XInput Controller Handoff**: Paused all launcher XInput polling and rumble tests while `victory.exe` is running so the game runner has exclusive controller access, and added an in-tab note clarifying that rumble strength/haptics are controlled by the game's Controls menu and runner HLE.

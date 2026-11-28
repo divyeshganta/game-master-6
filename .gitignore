@@ -11,3 +11,4 @@ config.json
 *.settings
 *.log
 theme.json
+.pkg

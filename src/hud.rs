@@ -1,4 +1,4 @@
-//! Universal-Standard Performance Overlay (v1.2 — RTSS / MangoHud / Steam Standard)
+//! Universal-Standard Performance Overlay (v15.2 — RTSS / MangoHud / Steam Standard)
 //! Supports 3 density modes:
 //!   0 = COMPACT   (380x36 sleek horizontal telemetry strip)
 //!   1 = STANDARD  (316x118 MangoHud/RTSS card: FPS, 1% Low, [WORLD]/[MENU], Frame/GPU ms, RAM/Commit, live 60-sample frametime sparkline)
@@ -101,7 +101,7 @@ impl HudOverlay {
             | WS_EX_TRANSPARENT
             | WS_EX_TOOLWINDOW
             | WS_EX_NOACTIVATE;
-        let title = wide("GM6 Performance HUD");
+        let title = wide("Game Performance HUD");
         let (w, h) = dims_for_mode(1);
         let hwnd = CreateWindowExW(
             ex_style,
@@ -428,7 +428,7 @@ unsafe extern "system" fn hud_wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lp
     }
 }
 
-// ─── v1.2 Standard-Style Click-Through Crosshair Overlay ─────────────────────
+// ─── v15.2 gm V-Style Click-Through Crosshair Overlay ─────────────────────
 static CROSSHAIR_AIM: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub struct CrosshairOverlay {
@@ -464,7 +464,7 @@ impl CrosshairOverlay {
             | WS_EX_TRANSPARENT
             | WS_EX_TOOLWINDOW
             | WS_EX_NOACTIVATE;
-        let title = wide("GM6 Reticle");
+        let title = wide("Game Reticle");
         let hwnd = CreateWindowExW(
             ex_style,
             class.as_ptr(),

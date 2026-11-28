@@ -37,41 +37,36 @@ pub struct Settings {
     pub high_perf_power: bool,       // Activate Windows High/Ultimate Performance power plan on launch
     pub hud_overlay: bool,           // Click-through always-on-top in-game FPS/RAM HUD
     pub auto_backup_saves: bool,     // Auto-backup saves before launch
+    pub auto_backup_before_update: bool, // Auto-backup saves before runner updates (ON by default)
     pub hud_corner: u8,              // 0=TL, 1=TR, 2=BL, 3=BR
-    // v10.1 input & ztrx engine settings
-    pub input_mode: String,          // "auto", "pad", "kbm" -> VICTORY_INPUT_MODE
-    pub keymap: String,              // Custom keyboard stand-in bindings -> VICTORY_KEYMAP
+    // v10.1 engine & cursor capture settings
     pub relay_mode: u8,              // 0=OFF, 1=RELAY 1, 2=RELAY 2 -> VICTORY_RELAY
     pub wide_back: bool,             // VICTORY_WIDE_BACK=1
     pub pipeline_wait_ms: u32,       // VICTORY_PIPELINE_WAIT_MS (default 24)
     pub bvh_builder: bool,           // VICTORY_BVH_BUILDER=1 (experimental ray-tracing BVH)
-    pub mouse_aim: bool,             // VICTORY_MOUSE_AIM=1 (Mouse camera + LMB/RMB triggers)
-    pub mouse_sens: String,          // VICTORY_MOUSE_SENS (0.6, 1.0, 1.5, 2.0)
-    pub mouse_lock: bool,            // VICTORY_MOUSE_LOCK=1 (360-deg cursor centering; F8 pauses)
     pub mouse_capture: bool,         // VICTORY_MOUSE_CAPTURE=1 (Capture & hide Windows cursor in-game)
     pub async_submit: bool,
     pub queue2: bool,
     pub indirect_window: bool,
     pub texture_no_wait: bool,
     pub merge_passes: bool,
-    // v1.4 Apex FPS & Open-World KBM suite
+    // v15.2 Apex FPS suite
     pub display_1080p: bool,
     pub wide_refresh: bool,
     pub wide_merge: bool,
     pub inplace_buf: bool,
-    pub kbm_crosshair: bool,
     pub profiler_on: bool,
     pub ambient_fill: bool,
     pub hoist_clamps: bool,
     pub fast_cores: bool,
-    // v1.4 studio launcher & runner options
+    // v15.2 studio launcher & runner options
     pub thin_lists: bool,                // VICTORY_THIN=1 (opt-in parallel list translation)
     pub display_mode: String,            // "auto", "1920x1080", "2560x1440", "3840x2160"
     pub borderless: bool,                // Borderless fullscreen vs windowed
     pub queue2_landing_mb: String,       // "48", "96", "128" -> VICTORY_QUEUE2_LANDING_MB
     pub ambient_shade: String,           // VICTORY_AMBIENT_SHADE
     pub last_prepared_runner_sig: String,// "size:mtime" of runner that last prepared cache
-    // v1.4 hardware-adaptive & verified BASELINE residency/pipeline settings
+    // v15.2 hardware-adaptive & verified victory residency/pipeline settings
     pub active_preset: String,           // "low", "balanced", "high", "custom"
     pub card_buffers_mb: String,         // "", "256", "512", "1024", "2048", "4096" -> VICTORY_CARD_BUFFERS_MB
     pub texture_room_percent: String,    // "88".."97" -> VICTORY_TEXTURE_ROOM_PERCENT
@@ -90,9 +85,8 @@ pub struct Settings {
     pub no_wait_resident: bool,          // VICTORY_WAIT_RESIDENT=0 (skip map/residency stalls)
     pub ambient_val: String,             // "off", "0.6", "0.8" -> VICTORY_AMBIENT
     pub ambient_air: String,             // "0", "1.0", "1.2", "1.5" -> VICTORY_AMBIENT_AIR
-    // v1.4 universal HUD density & keymap standard
+    // v15.2 universal HUD density & A/B standard
     pub hud_mode: u8,                    // 0=Compact, 1=Standard+FrametimeGraph, 2=Minimal
-    pub keymap_preset: String,           // "open-world", "fps", "left-handed", "pad-only"
     pub ab_experiment: String,           // "off", "async-submit", "thin", "wide-refresh", "upload-ahead" -> VICTORY_AB
     pub runner_env_overrides: Vec<(String, String)>, // per-runner KEY=VAL;... overrides keyed by runner_slug
     pub win_x: i32,
@@ -111,9 +105,9 @@ impl Default for Settings {
         Self {
             exe: String::new(),
             game_dir: String::new(),
-            runner: r"runners\baseline\victory.exe".into(),
+            runner: r"runners\victory-nvidia\victory.exe".into(),
             runner_kind: "auto".into(),
-            console_model: "series-s".into(),
+            console_model: "series-x".into(),
             title_args: String::new(),
             log_level: "warn".into(),
             capture: false,
@@ -132,7 +126,7 @@ impl Default for Settings {
             isolated_cache: false,
             offline_mode: false,
             theme: "vice".into(),
-            // v1.4: Hardware-adaptive BALANCED baseline defaults (12 GB sweet spot)
+            // v15.2: Hardware-adaptive BALANCED baseline defaults (12 GB sweet spot)
             card_buffers_min_mb: "4".into(),
             card_rehash_runs: true,
             join_copies: true,
@@ -141,18 +135,13 @@ impl Default for Settings {
             high_perf_power: false,
             hud_overlay: false,
             auto_backup_saves: true,
+            auto_backup_before_update: true,
             hud_corner: 0,
-            // Controller-first native PC default. KBM stays dormant (opt-in in INPUT).
-            input_mode: "pad".into(),
-            keymap: Self::default_keymap_string(),
             relay_mode: 2,
             wide_back: true,
             pipeline_wait_ms: 24,
             bvh_builder: false,
-            mouse_aim: false,
-            mouse_sens: "1.0".into(),
-            mouse_lock: false,
-            mouse_capture: false,
+            mouse_capture: true,
             async_submit: true,
             queue2: true,
             indirect_window: true,
@@ -162,21 +151,19 @@ impl Default for Settings {
             wide_refresh: true,
             wide_merge: true,
             inplace_buf: false,
-            // No floating reticle over the game window by default.
-            kbm_crosshair: false,
             profiler_on: false,
             ambient_fill: true,
             hoist_clamps: true,
             fast_cores: true,
-            thin_lists: false,
-            display_mode: "1920x1080".into(),
+            thin_lists: true,
+            display_mode: "2560x1440".into(),
             borderless: true,
             queue2_landing_mb: "96".into(),
             ambient_shade: "1.0,0.6,0.1,0.45".into(),
             last_prepared_runner_sig: String::new(),
-            active_preset: "balanced".into(),
+            active_preset: "auto".into(),
             card_buffers_mb: "1024".into(),
-            texture_room_percent: "94".into(),
+            texture_room_percent: "85".into(),
             card_room_for_targets_mb: "2560".into(),
             texture_budget_mb: String::new(),
             texture_stage_mb: String::new(),
@@ -193,7 +180,6 @@ impl Default for Settings {
             ambient_val: "0.3".into(),
             ambient_air: "1.2".into(),
             hud_mode: 1,
-            keymap_preset: "open-world".into(),
             ab_experiment: "off".into(),
             runner_env_overrides: Vec::new(),
             win_x: -1,
@@ -202,8 +188,8 @@ impl Default for Settings {
             win_h: 820,
             pinned_baseline_runner: String::new(),
             pinned_baseline_locked: false,
-            dlss_mode: "quality".into(),
-            framegen_x: 3,
+            dlss_mode: "balanced".into(),
+            framegen_x: 2,
             frame_interval_us: String::new(),
         }
     }
@@ -223,10 +209,14 @@ impl Settings {
     }
 
     pub fn load() -> Self {
-        let mut s = Self::default();
         let Ok(text) = fs::read_to_string(Self::path()) else {
-            return s;
+            return Self::default();
         };
+        Self::parse_from_str(&text)
+    }
+
+    pub fn parse_from_str(text: &str) -> Self {
+        let mut s = Self::default();
         let mut explicit_upscaler_enabled: Option<bool> = None;
         for line in text.lines() {
             let line = line.trim();
@@ -281,28 +271,12 @@ impl Settings {
                     "high_perf_power" => s.high_perf_power = parse_bool(v),
                     "hud_overlay" => s.hud_overlay = parse_bool(v),
                     "auto_backup_saves" => s.auto_backup_saves = parse_bool(v),
+                    "auto_backup_before_update" => s.auto_backup_before_update = parse_bool(v),
                     "hud_corner" => s.hud_corner = v.parse::<u8>().unwrap_or(0) % 4,
-                    "input_mode" => {
-                        if !v.is_empty() {
-                            s.input_mode = v.to_ascii_lowercase();
-                        }
-                    }
-                    "keymap" => {
-                        if !v.is_empty() {
-                            s.keymap = v.to_string();
-                        }
-                    }
                     "relay_mode" => s.relay_mode = v.parse::<u8>().unwrap_or(2).min(2),
                     "wide_back" => s.wide_back = parse_bool(v),
                     "pipeline_wait_ms" => s.pipeline_wait_ms = v.parse::<u32>().unwrap_or(24),
                     "bvh_builder" => s.bvh_builder = parse_bool(v),
-                    "mouse_aim" => s.mouse_aim = parse_bool(v),
-                    "mouse_sens" => {
-                        if !v.is_empty() {
-                            s.mouse_sens = v.to_string();
-                        }
-                    }
-                    "mouse_lock" => s.mouse_lock = parse_bool(v),
                     "mouse_capture" => s.mouse_capture = parse_bool(v),
                     "async_submit" => s.async_submit = parse_bool(v),
                     "queue2" => s.queue2 = parse_bool(v),
@@ -313,7 +287,6 @@ impl Settings {
                     "wide_refresh" => s.wide_refresh = parse_bool(v),
                     "wide_merge" => s.wide_merge = parse_bool(v),
                     "inplace_buf" => s.inplace_buf = parse_bool(v),
-                    "kbm_crosshair" => s.kbm_crosshair = parse_bool(v),
                     "profiler_on" => s.profiler_on = parse_bool(v),
                     "ambient_fill" => s.ambient_fill = parse_bool(v),
                     "hoist_clamps" => s.hoist_clamps = parse_bool(v),
@@ -343,7 +316,6 @@ impl Settings {
                     "ambient_val" => if !v.trim().is_empty() { s.ambient_val = v.trim().to_string(); },
                     "ambient_air" => s.ambient_air = v.trim().to_string(),
                     "hud_mode" => s.hud_mode = v.trim().parse::<u8>().unwrap_or(1) % 3,
-                    "keymap_preset" => if !v.trim().is_empty() { s.keymap_preset = v.trim().to_ascii_lowercase(); },
                     "ab_experiment" => if !v.trim().is_empty() { s.ab_experiment = v.trim().to_ascii_lowercase(); },
                     "win_x" => s.win_x = v.trim().parse().unwrap_or(-1),
                     "win_y" => s.win_y = v.trim().parse().unwrap_or(-1),
@@ -378,7 +350,7 @@ impl Settings {
 
     pub fn save(&self) -> Result<(), String> {
         let mut text = format!(
-            "# Game Master 6 v1.4 settings\n\
+            "# Game - GameMaster6 v15.4 settings\n\
              exe={}\n\
              game_dir={}\n\
              runner={}\n\
@@ -410,16 +382,12 @@ impl Settings {
              high_perf_power={}\n\
              hud_overlay={}\n\
              auto_backup_saves={}\n\
+             auto_backup_before_update={}\n\
              hud_corner={}\n\
-             input_mode={}\n\
-             keymap={}\n\
              relay_mode={}\n\
              wide_back={}\n\
              pipeline_wait_ms={}\n\
              bvh_builder={}\n\
-             mouse_aim={}\n\
-             mouse_sens={}\n\
-             mouse_lock={}\n\
              mouse_capture={}\n\
              async_submit={}\n\
              queue2={}\n\
@@ -430,7 +398,6 @@ impl Settings {
              wide_refresh={}\n\
              wide_merge={}\n\
              inplace_buf={}\n\
-             kbm_crosshair={}\n\
              profiler_on={}\n\
              ambient_fill={}\n\
              hoist_clamps={}\n\
@@ -460,7 +427,6 @@ impl Settings {
              ambient_val={}\n\
              ambient_air={}\n\
              hud_mode={}\n\
-             keymap_preset={}\n\
              ab_experiment={}\n\
              win_x={}\n\
              win_y={}\n\
@@ -502,16 +468,12 @@ impl Settings {
             bstr(self.high_perf_power),
             bstr(self.hud_overlay),
             bstr(self.auto_backup_saves),
+            bstr(self.auto_backup_before_update),
             self.hud_corner,
-            self.input_mode.trim(),
-            self.keymap.trim(),
             self.relay_mode,
             bstr(self.wide_back),
             self.pipeline_wait_ms,
             bstr(self.bvh_builder),
-            bstr(self.mouse_aim),
-            self.mouse_sens.trim(),
-            bstr(self.mouse_lock),
             bstr(self.mouse_capture),
             bstr(self.async_submit),
             bstr(self.queue2),
@@ -522,7 +484,6 @@ impl Settings {
             bstr(self.wide_refresh),
             bstr(self.wide_merge),
             bstr(self.inplace_buf),
-            bstr(self.kbm_crosshair),
             bstr(self.profiler_on),
             bstr(self.ambient_fill),
             bstr(self.hoist_clamps),
@@ -552,7 +513,6 @@ impl Settings {
             self.ambient_val.trim(),
             self.ambient_air.trim(),
             self.hud_mode,
-            self.keymap_preset.trim(),
             self.ab_experiment.trim(),
             self.win_x,
             self.win_y,
@@ -944,16 +904,6 @@ impl Settings {
         next.label()
     }
 
-    pub fn cycle_keymap_preset(&mut self) -> &'static str {
-        let next = crate::keymap::KeymapPreset::from_id(&self.keymap_preset).cycle_next();
-        self.keymap_preset = next.id().to_string();
-        let bindings = crate::keymap::preset_bindings(next);
-        if !bindings.is_empty() {
-            self.keymap = crate::keymap::serialize_bindings(&bindings);
-        }
-        next.label()
-    }
-
     pub fn cycle_hud_corner(&mut self) -> &'static str {
         self.hud_corner = (self.hud_corner + 1) % 4;
         self.hud_corner_label()
@@ -974,102 +924,7 @@ impl Settings {
 }
 
 
-pub const KEYBIND_SLOTS: [(&str, &str, &str); 14] = [
-    ("A", "Confirm / Sprint (A)", "Enter"),
-    ("B", "Back / Reload (B)", "Back"),
-    ("X", "Jump / Cover (X)", "X"),
-    ("Y", "Enter Vehicle / Account (Y)", "Y"),
-    ("LB", "Weapon Wheel / LB", "Q"),
-    ("RB", "Handbrake / Cover (RB)", "E"),
-    ("LT", "Aim / Brake (LT)", "Z"),
-    ("RT", "Fire / Accelerate (RT)", "C"),
-    ("LS", "Crouch / Horn (L3)", "F"),
-    ("RS", "Look Behind (R3)", "H"),
-    ("MENU", "Pause Menu (Start)", "Esc"),
-    ("VIEW", "Camera / Map (Select)", "Tab"),
-    ("UP", "Phone / D-Pad Up", "Up"),
-    ("DOWN", "Character / D-Pad Down", "Down"),
-];
-
 impl Settings {
-    pub fn default_keymap_string() -> String {
-        "A=Enter,B=Back,X=X,Y=Y,LB=Q,RB=E,LT=Z,RT=C,LS=F,RS=H,MENU=Esc,VIEW=Tab,UP=Up,DOWN=Down,LEFT=Left,RIGHT=Right,LY+=W,LY-=S,LX-=A,LX+=D,RY+=I,RY-=K,RX-=J,RX+=L".into()
-    }
-
-    pub fn get_keybind(&self, action: &str) -> String {
-        for pair in self.keymap.split([',', ';']) {
-            if let Some((k, v)) = pair.split_once('=') {
-                if k.trim().eq_ignore_ascii_case(action) {
-                    return v.trim().to_string();
-                }
-            }
-        }
-        for (k, _, def) in KEYBIND_SLOTS {
-            if k.eq_ignore_ascii_case(action) {
-                return def.to_string();
-            }
-        }
-        "Unbound".into()
-    }
-
-    pub fn set_keybind(&mut self, action: &str, new_key: &str) {
-        let clean_key = new_key.trim();
-        if clean_key.is_empty() {
-            return;
-        }
-        let mut pairs: Vec<(String, String)> = Vec::new();
-        let mut found = false;
-        let base = if self.keymap.trim().is_empty() {
-            Self::default_keymap_string()
-        } else {
-            self.keymap.clone()
-        };
-        for pair in base.split([',', ';']) {
-            if let Some((k, v)) = pair.split_once('=') {
-                let kt = k.trim();
-                if kt.eq_ignore_ascii_case(action) {
-                    pairs.push((kt.to_string(), clean_key.to_string()));
-                    found = true;
-                } else {
-                    pairs.push((kt.to_string(), v.trim().to_string()));
-                }
-            }
-        }
-        if !found {
-            pairs.push((action.to_string(), clean_key.to_string()));
-        }
-        self.keymap = pairs
-            .into_iter()
-            .map(|(k, v)| format!("{k}={v}"))
-            .collect::<Vec<_>>()
-            .join(",");
-    }
-
-    pub fn cycle_input_mode(&mut self) -> &'static str {
-        match self.input_mode.as_str() {
-            "auto" => {
-                self.input_mode = "kbm".into();
-                "KEYBOARD & MOUSE (FORCED)"
-            }
-            "kbm" => {
-                self.input_mode = "pad".into();
-                "PRIMARY CONTROLLER (XINPUT #1)"
-            }
-            _ => {
-                self.input_mode = "auto".into();
-                "AUTO (PAD #1 OR KBM FALLBACK)"
-            }
-        }
-    }
-
-    pub fn input_mode_label(&self) -> &'static str {
-        match self.input_mode.as_str() {
-            "kbm" => "MODE: KBM",
-            "pad" => "MODE: PAD",
-            _ => "MODE: AUTO",
-        }
-    }
-
     pub fn cycle_relay_mode(&mut self) -> &'static str {
         self.relay_mode = (self.relay_mode + 1) % 3;
         self.relay_label()
@@ -1095,27 +950,6 @@ impl Settings {
 }
 
 impl Settings {
-    pub fn cycle_mouse_sens(&mut self) -> &'static str {
-        match self.mouse_sens.trim() {
-            "0.6" => {
-                self.mouse_sens = "1.0".into();
-                "1.0x"
-            }
-            "1.0" => {
-                self.mouse_sens = "1.5".into();
-                "1.5x"
-            }
-            "1.5" => {
-                self.mouse_sens = "2.0".into();
-                "2.0x"
-            }
-            _ => {
-                self.mouse_sens = "0.6".into();
-                "0.6x"
-            }
-        }
-    }
-
     pub fn runner_env_for(&self, runner_id: &str) -> Option<&str> {
         let key = runner_id.trim().to_ascii_lowercase();
         self.runner_env_overrides
@@ -1232,16 +1066,41 @@ mod tests {
         s.runner = String::new();
         s.upscaler_dir = String::new();
         assert!(!s.resolved_runner().as_os_str().is_empty());
-        assert_eq!(s.display_mode_label(), "1920 × 1080");
+        assert_eq!(s.display_mode_label(), "2560 × 1440");
 
         let long_seg = "a".repeat(260);
         s.exe = format!(r"C:\Titles\日本語\テスト\{long_seg}\title.exe");
         s.game_dir = format!(r"C:\Titles\日本語\テスト\{long_seg}");
         s.runner = r"C:\Tools\日本語\victory.exe".into();
         s.upscaler_dir = r"C:\Tools\FSR_テスト".into();
+        s.console_model = "series-s".into();
         s.set_runner_env_for("xcl", "XCL_LOG=warn;XCL_TEST=1");
         assert_eq!(s.runner_env_for("xcl"), Some("XCL_LOG=warn;XCL_TEST=1"));
         assert_eq!(s.resolved_runner(), PathBuf::from(r"C:\Tools\日本語\victory.exe"));
         assert!(s.is_series_s());
+    }
+
+    #[test]
+    fn legacy_kbm_amd_config_loads_cleanly() {
+        let legacy = "\
+            console=series-x\n\
+            input_mode=kbm\n\
+            keymap=A=Enter,B=Back\n\
+            keymap_preset=gm-pc\n\
+            mouse_aim=true\n\
+            mouse_sens=1.5\n\
+            mouse_lock=true\n\
+            kbm_crosshair=true\n\
+            mouse_capture=true\n\
+            borderless=true\n\
+            dlss_mode=balanced\n\
+            framegen_x=2\n";
+        let s = Settings::parse_from_str(legacy);
+        assert_eq!(s.console_model, "series-x");
+        assert!(s.mouse_capture);
+        assert!(s.borderless);
+        assert_eq!(s.dlss_mode, "balanced");
+        assert_eq!(s.framegen_x, 2);
+        assert!(s.auto_backup_before_update);
     }
 }

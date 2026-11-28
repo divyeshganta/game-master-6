@@ -7,7 +7,7 @@ use crate::win32::hardlink_or_copy;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RunnerKind {
-    Baseline,
+    victory,
     LocalZtrx,
     VictoryFork,
     Victory,
@@ -20,7 +20,7 @@ pub enum RunnerKind {
 impl RunnerKind {
     pub fn id(self) -> &'static str {
         match self {
-            RunnerKind::Baseline => "baseline",
+            RunnerKind::victory => "victory",
             RunnerKind::LocalZtrx => "local-ztrx",
             RunnerKind::VictoryFork => "victory-fork",
             RunnerKind::Victory => "victory",
@@ -33,7 +33,7 @@ impl RunnerKind {
 
     pub fn badge(self) -> &'static str {
         match self {
-            RunnerKind::Baseline => "BASELINE · BASELINE",
+            RunnerKind::victory => "victory · BASELINE",
             RunnerKind::LocalZtrx => "LOCAL ZTRX",
             RunnerKind::VictoryFork => "VICTORY-FORK · RT",
             RunnerKind::Victory => "VICTORY UPSTREAM",
@@ -46,7 +46,7 @@ impl RunnerKind {
 
     pub fn from_id(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
-            "baseline" | "cool_fox" | "cool-fox" => Some(RunnerKind::Baseline),
+            "victory" | "cool_fox" | "cool-fox" => Some(RunnerKind::victory),
             "local-ztrx" | "local_ztrx" | "ztrx" | "zettrox" => Some(RunnerKind::LocalZtrx),
             "victory-fork" | "victory_fork" | "hyphennn" => Some(RunnerKind::VictoryFork),
             "victory" => Some(RunnerKind::Victory),
@@ -61,7 +61,7 @@ impl RunnerKind {
     pub fn is_victory_family(self) -> bool {
         matches!(
             self,
-            RunnerKind::Baseline | RunnerKind::LocalZtrx | RunnerKind::VictoryFork | RunnerKind::Victory | RunnerKind::VictoryDiag
+            RunnerKind::victory | RunnerKind::LocalZtrx | RunnerKind::VictoryFork | RunnerKind::Victory | RunnerKind::VictoryDiag
         )
     }
 
@@ -71,8 +71,8 @@ impl RunnerKind {
 
     pub fn detect_from_path(path: &Path) -> Self {
         let lower = path.to_string_lossy().to_ascii_lowercase();
-        if lower.contains("baseline") || lower.contains("cool_fox") || lower.contains("overnight-tuned") {
-            RunnerKind::Baseline
+        if lower.contains("victory") || lower.contains("cool_fox") || lower.contains("overnight-tuned") {
+            RunnerKind::victory
         } else if lower.contains("diag") {
             RunnerKind::VictoryDiag
         } else if lower.contains("ztrx") || lower.contains("zettrox") {
@@ -97,14 +97,14 @@ impl RunnerKind {
 
     pub fn cycle_next(self) -> Self {
         match self {
-            RunnerKind::Baseline => RunnerKind::VictoryFork,
+            RunnerKind::victory => RunnerKind::VictoryFork,
             RunnerKind::LocalZtrx => RunnerKind::VictoryFork,
             RunnerKind::VictoryFork => RunnerKind::Victory,
             RunnerKind::Victory => RunnerKind::VictoryDiag,
             RunnerKind::VictoryDiag => RunnerKind::Xcl,
             RunnerKind::Xcl => RunnerKind::Xbox2Windows,
             RunnerKind::Xbox2Windows => RunnerKind::Generic,
-            RunnerKind::Generic => RunnerKind::Baseline,
+            RunnerKind::Generic => RunnerKind::victory,
         }
     }
 }
@@ -305,6 +305,12 @@ pub fn default_victory_cache_dir() -> PathBuf {
 }
 
 pub fn default_victory_data_dir() -> Option<PathBuf> {
+    // Respect an explicitly configured VICTORY_DATA_DIR first, then %LOCALAPPDATA%\victory\data.
+    if let Some(v) = std::env::var_os("VICTORY_DATA_DIR") {
+        if !v.is_empty() {
+            return Some(PathBuf::from(v));
+        }
+    }
     std::env::var_os("LOCALAPPDATA").map(|l| PathBuf::from(l).join("victory").join("data"))
 }
 
@@ -395,8 +401,8 @@ pub fn discover_runners(s: &Settings) -> Vec<DiscoveredRunner> {
         "xcl.exe",
         "xbox2windows.exe",
         "tuxbox.exe",
-        "console-runner.exe",
-        "open-console.exe",
+        "nativex.exe",
+        "opennative.exe",
     ] {
         push_candidate(app.join(fname), None);
     }
@@ -838,9 +844,7 @@ pub fn sync_from_victory_settings(s: &mut Settings, runner_path: &Path) -> bool 
     if let Some(fs_val) = get("VICTORY_FULLSCREEN") {
         s.borderless = fs_val.trim() == "1";
     }
-    if let Some(mc_val) = get("VICTORY_MOUSE_CAPTURE") {
-        s.mouse_capture = mc_val.trim() == "1";
-    }
+    // VICTORY_MOUSE_CAPTURE is owned by app config (default ON); not overridden by runner file.
     true
 }
 
@@ -891,12 +895,15 @@ pub fn sync_to_victory_settings(s: &Settings, runner_path: &Path) -> Result<(), 
     }
     set_kv("VICTORY_FULLSCREEN", if s.borderless { "1" } else { "0" }.into());
     set_kv("VICTORY_MOUSE_CAPTURE", if s.mouse_capture { "1" } else { "0" }.into());
-    set_kv("VICTORY_DLSS", if dlss_active { "1" } else { "0" }.into());
-    set_kv("VICTORY_DLSS_MODE", if dlss_active { dlss_m.clone() } else { "off".into() });
-    set_kv("VICTORY_MENU_DLSS", if dlss_active { dlss_m } else { "off".into() });
-    set_kv("VICTORY_FRAMEGEN", if fg_x > 0 { "1" } else { "0" }.into());
-    set_kv("VICTORY_FRAMEGEN_X", fg_x.to_string());
-    set_kv("VICTORY_MENU_FRAMEGEN", fg_x.to_string());
+    if dlss_active {
+        // Zero-Regression Lock: DLSS + FG active; never persist invalid `off`.
+        set_kv("VICTORY_DLSS", "1".into());
+        set_kv("VICTORY_DLSS_MODE", dlss_m.clone());
+        set_kv("VICTORY_MENU_DLSS", dlss_m);
+        set_kv("VICTORY_FRAMEGEN", if fg_x > 0 { "1".into() } else { "0".into() });
+        set_kv("VICTORY_FRAMEGEN_X", fg_x.to_string());
+        set_kv("VICTORY_MENU_FRAMEGEN", fg_x.to_string());
+    }
     if !s.texture_room_percent.trim().is_empty() {
         set_kv("VICTORY_TEXTURE_ROOM_PERCENT", s.texture_room_percent.trim().to_string());
     }

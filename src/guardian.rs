@@ -1,6 +1,6 @@
-//! Automated Crash-Recovery & Last-Known-Good Guardian (v1.2)
+//! Automated Crash-Recovery & Last-Known-Good Guardian (v15.2)
 //! Snapshots proven-stable settings after >=90s of clean runtime, diagnoses early crashes
-//! from Baseline logs, and enables 1-click Safe Boot rollback without losing user paths.
+//! from victory logs, and enables 1-click Safe Boot rollback without losing user paths.
 
 use std::fs;
 use std::path::PathBuf;
@@ -44,7 +44,7 @@ pub fn restore_last_known_good() -> Result<Settings, String> {
     Ok(Settings::load())
 }
 
-/// Analyzes a failed or short (<45s) session log to pinpoint the exact Baseline failure mode.
+/// Analyzes a failed or short (<45s) session log to pinpoint the exact victory failure mode.
 pub fn diagnose_crash(exit_code: Option<i32>, duration_secs: u64, log_lines: &[String]) -> Option<CrashVerdict> {
     let is_crash = match exit_code {
         Some(0) | None => false,

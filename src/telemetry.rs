@@ -75,7 +75,7 @@ pub fn load_recent_sessions(limit: usize) -> Vec<SessionRecord> {
     rows
 }
 
-/// Extracts average 3D-world FPS (lines with `draws/frame` >= 500, matching Baseline capture.rs:123),
+/// Extracts average 3D-world FPS (lines with `draws/frame` >= 500, matching victory capture.rs:123),
 /// so menu/loading 30 FPS never masks real in-world gameplay FPS.
 pub fn extract_world_avg_fps(lines: &[String]) -> Option<f64> {
     let mut sum = 0.0f64;
@@ -104,7 +104,7 @@ pub fn extract_world_avg_fps(lines: &[String]) -> Option<f64> {
     if cnt > 0 { Some(sum / cnt as f64) } else { None }
 }
 
-/// Classifies the primary runtime bottleneck directly from Baseline log signals.
+/// Classifies the primary runtime bottleneck directly from victory log signals.
 pub fn classify_bottleneck(lines: &[String]) -> &'static str {
     let mut vram_hit = false;
     let mut commit_hit = false;
@@ -273,7 +273,7 @@ pub struct RunnerBenchSummary {
     pub max_secs: u64,
 }
 
-/// Rebuilds and merges `sessions.csv` from all `GM6-*.log` files in `logs/` so manual closes
+/// Rebuilds and merges `sessions.csv` from all `Game-*.log` files in `logs/` so manual closes
 /// and non-zero exits are never missed across Leaderboard, A/B Scorecard, and Playtime.
 pub fn sync_sessions_from_logs() {
     let mut existing: Vec<SessionRecord> = Vec::new();
@@ -302,7 +302,7 @@ pub fn sync_sessions_from_logs() {
             if p.is_file()
                 && p.file_name()
                     .and_then(|n| n.to_str())
-                    .map(|n| n.starts_with("GM6-") && n.ends_with(".log"))
+                    .map(|n| n.starts_with("Game-") && n.ends_with(".log"))
                     .unwrap_or(false)
             {
                 log_files.push(p);
@@ -405,7 +405,7 @@ pub fn sync_sessions_from_logs() {
             existing.push(SessionRecord {
                 timestamp: ts,
                 runner,
-                adapter: "baseline".into(),
+                adapter: "victory".into(),
                 console,
                 kind: "GAME RUNNER".into(),
                 duration_secs,
@@ -443,7 +443,7 @@ pub fn sync_sessions_from_logs() {
 }
 
 fn parse_log_filename_ts(fname: &str) -> Option<String> {
-    let stem = fname.strip_prefix("GM6-")?.strip_suffix(".log")?;
+    let stem = fname.strip_prefix("Game-")?.strip_suffix(".log")?;
     let (d, t) = stem.split_once('-')?;
     if d.len() == 8 && t.len() == 6 {
         Some(format!(
@@ -699,7 +699,7 @@ pub fn compare_two_stats(run_a: LogRunStats, run_b: LogRunStats) -> LogCompariso
     }
 }
 
-/// Parses and compares the two most recent `GM6-*.log` files in `logs/`.
+/// Parses and compares the two most recent `Game-*.log` files in `logs/`.
 pub fn compare_last_two_logs() -> Option<LogComparison> {
     let rd = fs::read_dir(logs_dir()).ok()?;
     let mut files: Vec<(std::time::SystemTime, String, PathBuf)> = rd
@@ -707,7 +707,7 @@ pub fn compare_last_two_logs() -> Option<LogComparison> {
         .filter_map(|e| {
             let p = e.path();
             let name = p.file_name()?.to_str()?.to_string();
-            if p.is_file() && name.starts_with("GM6-") && name.ends_with(".log") {
+            if p.is_file() && name.starts_with("Game-") && name.ends_with(".log") {
                 let m = e.metadata().ok()?.modified().ok()?;
                 Some((m, name, p))
             } else {
@@ -902,8 +902,8 @@ mod tests {
             "WARN victory_gpu::draw: no card copy for a title buffer".into(),
             "WARN victory_gpu::draw: the card has no room for more".into(),
         ];
-        let a = parse_log_run_stats("GM6-new.log", &log_new);
-        let b = parse_log_run_stats("GM6-old.log", &log_old);
+        let a = parse_log_run_stats("Game-new.log", &log_new);
+        let b = parse_log_run_stats("Game-old.log", &log_old);
         assert_eq!(a.resolution, "1600x900");
         assert_eq!(a.flags_summary, "R2 S2 T94% B4");
         assert!((a.avg_fps.unwrap() - 6.8).abs() < 0.01);
