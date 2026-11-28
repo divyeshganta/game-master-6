@@ -206,6 +206,29 @@ pub const SHADER_PRESETS: [&str; 6] = ["AUTO", "64", "128", "256", "512", "1024"
 pub const LOG_LEVELS: [&str; 4] = ["info", "warn", "diagnostics", "trace"];
 pub const TUNING_SCROLL_STEP: usize = 32;
 
+/// Compact a verbose runner log line for the small LIVE ACTIVITY preview:
+/// `[HH:MM:SS] message`, with the ISO timestamp and level word removed.
+fn compact_log_line(line: &str) -> String {
+    let t = line.trim();
+    let time = t
+        .find('T')
+        .and_then(|p| t.get(p + 1..p + 9))
+        .filter(|s| s.bytes().all(|b| b.is_ascii_digit() || b == b':'))
+        .unwrap_or("");
+    let mut rest = t.find('Z').map_or(t, |z| &t[z + 1..]).trim();
+    for level in ["INFO ", "WARN ", "ERROR ", "DEBUG ", "TRACE "] {
+        if let Some(r) = rest.strip_prefix(level) {
+            rest = r;
+            break;
+        }
+    }
+    if time.is_empty() {
+        rest.to_string()
+    } else {
+        format!("[{time}] {rest}")
+    }
+}
+
 pub fn tuning_max_scroll(client_h: c_int) -> usize {
     let r_bottom = client_h - 152;
     let view_h = (r_bottom - 166).max(300);
@@ -819,8 +842,8 @@ pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(R
     // 4. Top Header Bar
     draw_text(
         hdc,
-        "GAME MASTER",
-        RECT::new(main_l, 16, main_l + 260, 50),
+        "NVIDIA RTX EDITION",
+        RECT::new(main_l, 16, main_l + 300, 50),
         ctx.fonts.title,
         COL_WHITE,
         DT_LEFT | DT_VCENTER | DT_SINGLELINE,
@@ -1134,12 +1157,10 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     let mem_r = RECT::new(r.left + (s_w + s_gap) * 2, strip_y, r.right, strip_y + strip_h);
     let commit_ok = ctx.sys.commit_healthy() && !ctx.sys.pagefile_pending_reboot;
     rounded_rect(hdc, mem_r, if commit_ok { COL_PANEL } else { COL_AMBER_BG }, if commit_ok { COL_BORDER } else { COL_AMBER }, 12);
-    let disp_tag = if ctx.sys.primary_res.is_empty() {
-        format!("{}D", ctx.sys.display_count.max(1))
-    } else {
-        format!("{} ({}D)", ctx.sys.primary_res, ctx.sys.display_count.max(1))
-    };
-    let mem_lbl = format!("RAM {:.1}G · COMMIT {:.1}G · {}", ctx.sys.avail_ram_gb, ctx.sys.avail_commit_gb, disp_tag);
+    let mem_lbl = format!(
+        "MEMORY FREE · {:.1} GB RAM · {:.1} GB Commit",
+        ctx.sys.avail_ram_gb, ctx.sys.avail_commit_gb
+    );
     draw_text(hdc, &mem_lbl, RECT::new(mem_r.left + 12, mem_r.top + 5, mem_r.right - 12, mem_r.top + 25), ctx.fonts.small_bold, if commit_ok { COL_WHITE } else { COL_AMBER }, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     let commit_pct = if ctx.sys.total_commit_gb > 0.1 {
         (((ctx.sys.total_commit_gb - ctx.sys.avail_commit_gb) / ctx.sys.total_commit_gb) * 100.0).clamp(2.0, 100.0) as u32
@@ -1224,14 +1245,14 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     let p_gap = 6;
     let p_w = (preset_r.width() - 32 - p_gap * 3) / 4;
     let auto_active = active_preset == crate::presets::PresetKind::Auto;
-    // AUTO (THIS PC) first
+    // AUTO first
     {
         let pr = RECT::new(preset_r.left + 16, preset_r.top + 38, preset_r.left + 16 + p_w, preset_r.top + 88);
         let hov = ctx.hover == Target::ApplyPresetAuto;
         let bg = if auto_active { COL_CYAN_BG } else if hov { COL_PANEL_HOVER } else { COL_SIDEBAR };
         let bd = if auto_active { COL_PINK } else if hov { COL_BORDER_HI } else { COL_BORDER };
         rounded_rect(hdc, pr, bg, bd, 10);
-        draw_text(hdc, "AUTO (THIS PC)", pr, ctx.fonts.small_bold, if auto_active { COL_PINK } else { COL_TEXT }, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+        draw_text(hdc, "AUTO", pr, ctx.fonts.small_bold, if auto_active { COL_PINK } else { COL_TEXT }, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         hits.push((pr, Target::ApplyPresetAuto));
     }
     let presets = [
@@ -1275,7 +1296,14 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         if ctx.hover == Target::ToggleViper { COL_BORDER_HI } else { vp_bd },
         12,
     );
-    draw_text(hdc, vp_lbl, vp_r, ctx.fonts.small_bold, vp_fg, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    draw_text(
+        hdc,
+        vp_lbl,
+        RECT::new(vp_r.left + 10, vp_r.top + 2, vp_r.right - 10, vp_r.bottom - 2),
+        ctx.fonts.small_bold,
+        vp_fg,
+        DT_END_ELLIPSIS | DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+    );
     hits.push((vp_r, Target::ToggleViper));
 
     // GAME KBM: OFF keeps mouse out of the title and stops WASD merging into pad 0,
@@ -1293,10 +1321,10 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     draw_text(
         hdc,
         kb_lbl,
-        kb_r,
+        RECT::new(kb_r.left + 10, kb_r.top + 2, kb_r.right - 10, kb_r.bottom - 2),
         ctx.fonts.small_bold,
         if kb_on { COL_MUTED } else { COL_EMERALD },
-        DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+        DT_END_ELLIPSIS | DT_CENTER | DT_VCENTER | DT_SINGLELINE,
     );
     hits.push((kb_r, Target::ToggleGameKbm));
 
@@ -1349,18 +1377,26 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         let lbl = format!("PREPARING CACHE... {}% ({})", pct, ctx.audit.shader_cache_label);
         draw_text(hdc, &lbl, RECT::new(prep_r.left + 12, prep_r.top + 8, prep_r.right - 12, prep_r.bottom - 22), ctx.fonts.body_bold, COL_AMBER, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     } else {
+        let cache_size = ctx
+            .audit
+            .shader_cache_label
+            .split('(')
+            .next()
+            .unwrap_or(&ctx.audit.shader_cache_label)
+            .trim();
         let prep_lbl = if cache_ready {
-            format!("✓  CACHE READY ({})", ctx.audit.shader_cache_label)
+            format!("✓ CACHE READY · {cache_size}")
         } else {
             "PREPARE CACHE".into()
         };
+        let prep_text_r = RECT::new(prep_r.left + 16, prep_r.top + 2, prep_r.right - 16, prep_r.bottom - 2);
         draw_text(
             hdc,
             &prep_lbl,
-            prep_r,
-            ctx.fonts.title,
+            prep_text_r,
+            ctx.fonts.small_bold,
             if cache_ready { COL_EMERALD } else { COL_CYAN },
-            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+            DT_END_ELLIPSIS | DT_CENTER | DT_VCENTER | DT_SINGLELINE,
         );
     }
     hits.push((prep_r, Target::Prepare));
@@ -1447,7 +1483,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
             let step3 = if ctx.settings.active_preset.eq_ignore_ascii_case("auto") { "3. Hit Play (AUTO pre-selected)" } else { "3. Hit Play" };
             draw_text(hdc, &format!("{step1}  ·  {step2}  ·  {step3}"), RECT::new(cr.left + 16, cr.top + 38, cr.right - 360, cr.bottom - 10), ctx.fonts.small, COL_TEXT, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             let auto_r = RECT::new(cr.right - 292, cr.top + 20, cr.right - 14, cr.bottom - 20);
-            draw_button(hdc, auto_r, "AUTO-SETUP (RUNNER + DLSS + SHADERS)", ctx.fonts.small_bold, ctx.hover == Target::OneClickAutoSetup, COL_EMERALD, Target::OneClickAutoSetup, hits);
+            draw_button(hdc, auto_r, "1-CLICK AUTO-SETUP", ctx.fonts.small_bold, ctx.hover == Target::OneClickAutoSetup, COL_EMERALD, Target::OneClickAutoSetup, hits);
             let br_r = RECT::new(auto_r.left - 134, cr.top + 20, auto_r.left - 8, cr.bottom - 20);
             draw_button(hdc, br_r, "BROWSE EXE...", ctx.fonts.small_bold, ctx.hover == Target::BrowseExe, COL_AMBER, Target::BrowseExe, hits);
             card_bottom = cr.bottom;
@@ -1549,13 +1585,10 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         // Left Card: LIVE HARDWARE & PRE-FLIGHT BREAKDOWN
         rounded_rect(hdc, left_card, COL_PANEL, COL_BORDER, 14);
         let pf = crate::preflight::evaluate(ctx.settings, ctx.sys, ctx.audit);
-        let pf_col = if pf.score >= 92 { COL_EMERALD } else if pf.score >= 75 { COL_CYAN } else { COL_AMBER };
-        let pf_badge_r = RECT::new(left_card.right - 200, left_card.top + 8, left_card.right - 12, left_card.top + 30);
-        draw_pill(hdc, pf_badge_r, &pf.summary, ctx.fonts.small_bold, COL_SIDEBAR, pf_col, pf_col);
         draw_text(
             hdc,
             "LIVE HARDWARE & PRE-FLIGHT",
-            RECT::new(left_card.left + 14, left_card.top + 8, pf_badge_r.left - 8, left_card.top + 30),
+            RECT::new(left_card.left + 14, left_card.top + 8, left_card.right - 14, left_card.top + 30),
             ctx.fonts.small_bold,
             COL_CYAN,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE,
@@ -1645,7 +1678,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
             RECT::new(right_card.left + 14, ry, right_card.right - 14, ry + 18),
             ctx.fonts.small_bold,
             COL_WHITE,
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
         );
         ry += 20;
         // v1.7.0: one-line bottleneck verdict from the newest session log.
@@ -1657,7 +1690,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
             RECT::new(right_card.left + 14, ry, right_card.right - 14, ry + 18),
             ctx.fonts.small,
             verdict_col,
-            DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
         );
         ry += 20;
 
@@ -1691,13 +1724,14 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
                 } else {
                     COL_MUTED
                 };
+                let short = compact_log_line(line);
                 draw_text(
                     hdc,
-                    line,
+                    &short,
                     RECT::new(right_card.left + 14, ry, right_card.right - 14, ry + 15),
                     ctx.fonts.mono,
                     col,
-                    DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+                    DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS,
                 );
                 ry += 15;
             }
