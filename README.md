@@ -14,6 +14,8 @@
 
 </div>
 
+![Game Master 6 v1.7.0 PLAY tab](docs/screenshots/play.png)
+
 Game Master 6 is a small, native Rust + Win32 GDI Windows launcher for Xbox Series compatibility runners. It detects your GPU, applies a safe NVIDIA RTX preset, prepares the shader cache, launches the game, and can bridge the optional VIper mod framework — all without touching your original game files. Release builds are self-contained and **contain no game files or bundled third-party binaries** — bring your own game directory and runner. Licensed under **GPL-3.0**.
 
 ---
