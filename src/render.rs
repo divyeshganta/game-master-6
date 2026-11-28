@@ -787,7 +787,7 @@ pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(R
     );
     draw_text(
         hdc,
-        "v1.6.1",
+        "v1.6.2",
         RECT::new(20, h - 40, 104, h - 20),
         ctx.fonts.small_bold,
         COL_DIM,
@@ -825,7 +825,7 @@ pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(R
     } else {
         "CACHE NOT PREPARED".into()
     };
-    let header_sub = format!("v1.6.1 · {phase_txt}");
+    let header_sub = format!("v1.6.2 · {phase_txt}");
     draw_text(
         hdc,
         &header_sub,
@@ -1023,7 +1023,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         ctx.settings.active_runner_kind().badge()
     };
     let gpu_eyebrow = if ctx.sys.gpu_name.is_empty() {
-        format!("DETECTING GPU  ·  {}  ·  v1.6.1", active_tag)
+        format!("DETECTING GPU  ·  {}  ·  v1.6.2", active_tag)
     } else if ctx.sys.vram_gb > 0.5 {
         format!(
             "{}  ·  {:.0} GB VRAM  ·  {}",
@@ -1045,7 +1045,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     // Generous rects (70px) give Oswald's descenders room so neither line clips.
     draw_text(
         hdc,
-        "Title",
+        "GAME MASTER",
         RECT::new(tx + 2, hero_r.top + 38, tx + tw + 4, hero_r.top + 108),
         ctx.fonts.hero,
         rgb(16, 6, 28),
@@ -1053,7 +1053,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     );
     draw_text(
         hdc,
-        "Title",
+        "GAME MASTER",
         RECT::new(tx - 1, hero_r.top + 36, tx + tw, hero_r.top + 106),
         ctx.fonts.hero,
         COL_WHITE,
@@ -1061,7 +1061,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     );
     draw_text(
         hdc,
-        "AUTO VI",
+        "EDITION VI",
         RECT::new(tx + 2, hero_r.top + 98, tx + tw + 4, hero_r.top + 168),
         ctx.fonts.hero,
         rgb(16, 6, 28),
@@ -1069,7 +1069,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     );
     draw_text(
         hdc,
-        "AUTO VI",
+        "EDITION VI",
         RECT::new(tx - 1, hero_r.top + 96, tx + tw, hero_r.top + 166),
         ctx.fonts.hero,
         COL_PINK,
@@ -1304,7 +1304,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         let secs = sess.started_at.elapsed().as_secs();
         format!("■  STOP GAME ({:02}:{:02})", secs / 60, secs % 60)
     } else {
-        "▶  LAUNCH Title".into()
+        "▶  LAUNCH".into()
     };
     let play_badge = if crate::runners::has_dlss_dlls_beside(&ctx.settings.resolved_runner()) {
         "DLSS + FG READY"
@@ -1341,7 +1341,8 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
             draw_text(hdc, &title, RECT::new(cr.left + 16, cr.top + 10, cr.right - 340, cr.top + 30), ctx.fonts.small_bold, COL_CORAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             draw_text(hdc, diag, RECT::new(cr.left + 16, cr.top + 34, cr.right - 340, cr.bottom - 10), ctx.fonts.small, COL_TEXT, DT_LEFT | DT_WORDBREAK);
 
-            let dis_r = RECT::new(cr.right - 88, cr.top + 16, cr.right - 14, cr.top + 52);
+            // Compact × dismiss control (v1.6.2).
+            let dis_r = RECT::new(cr.right - 46, cr.top + 12, cr.right - 12, cr.top + 42);
             let zip_r = RECT::new(dis_r.left - 108, cr.top + 16, dis_r.left - 6, cr.top + 52);
             let log_r = RECT::new(zip_r.left - 96, cr.top + 16, zip_r.left - 6, cr.top + 52);
             if crate::guardian::has_last_known_good() {
@@ -1350,7 +1351,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
             }
             draw_button(hdc, log_r, "OPEN LOG", ctx.fonts.small_bold, ctx.hover == Target::OpenCurrentLog, COL_CYAN, Target::OpenCurrentLog, hits);
             draw_button(hdc, zip_r, "EXPORT ZIP", ctx.fonts.small_bold, ctx.hover == Target::ExportAiBundle, COL_AMBER, Target::ExportAiBundle, hits);
-            draw_button(hdc, dis_r, "DISMISS", ctx.fonts.small_bold, ctx.hover == Target::DismissCrash, COL_MUTED, Target::DismissCrash, hits);
+            draw_button(hdc, dis_r, "\u{00D7}", ctx.fonts.small_bold, ctx.hover == Target::DismissCrash, COL_MUTED, Target::DismissCrash, hits);
             card_bottom = cr.bottom;
         }
     } else if ctx.settings.exe.trim().is_empty()
@@ -1561,7 +1562,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
                 rec.runner, rec.console, rec.duration_secs, rec.peak_fps
             )
         } else {
-            "No completed session recorded yet — launch Title to benchmark.".into()
+            "No completed session recorded yet — launch the runner to benchmark.".into()
         };
         draw_text(
             hdc,
@@ -1569,6 +1570,18 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
             RECT::new(right_card.left + 14, ry, right_card.right - 14, ry + 18),
             ctx.fonts.small_bold,
             COL_WHITE,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+        );
+        ry += 20;
+        // v1.6.2: one-line bottleneck verdict from the newest session log.
+        let verdict = crate::telemetry::session_bottleneck_verdict();
+        let verdict_col = if verdict.starts_with("Healthy") { COL_EMERALD } else { COL_AMBER };
+        draw_text(
+            hdc,
+            &verdict,
+            RECT::new(right_card.left + 14, ry, right_card.right - 14, ry + 18),
+            ctx.fonts.small,
+            verdict_col,
             DT_LEFT | DT_VCENTER | DT_SINGLELINE,
         );
         ry += 20;
@@ -1788,7 +1801,7 @@ Click SYNC LIVE to retry or PORTWATCH VI to open in browser."),
         let msg = if ctx.portwatch_syncing {
             "Fetching live standings from https://portwatch-vi.xyz/tracker.json ..."
         } else {
-            "Click SYNC LIVE to scan the latest Title PC ports, forks, and ray-tracing builds from portwatch-vi.xyz."
+            "Click SYNC LIVE to scan the latest public compatibility-runner forks, forks, and ray-tracing builds from portwatch-vi.xyz."
         };
         draw_text(hdc, msg, RECT::new(right_r.left + 16, right_r.top + 48, right_r.right - 16, right_r.top + 120), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_WORDBREAK);
         return;
@@ -1845,7 +1858,8 @@ Click SYNC LIVE to retry or PORTWATCH VI to open in browser."),
         } else {
             proj.stage.clone()
         };
-        draw_text(hdc, &detail, RECT::new(pct_r.right + 10, pr.top + 24, pr.right - right_pad, pr.bottom - 4), ctx.fonts.small, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+        let detail = crate::portwatch::sanitize_tracker_text(&detail);
+        draw_text(hdc, &detail, RECT::new(pct_r.right + 10, pr.top + 24, pr.right - right_pad, pr.bottom - 4), ctx.fonts.small, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
 
         let open_r = RECT::new(pr.right - 82, pr.top + 9, pr.right - 8, pr.bottom - 9);
         let lbl = if proj.is_private { "TRACK" } else { "GITHUB" };
@@ -2251,17 +2265,8 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
         let c2_gap = 12;
         let c2_w = (inner_w - c2_gap) / 2;
         let last_h = 68;
-        let up_card = RECT::new(left_x, y, left_x + c2_w, y + last_h);
-        rounded_rect(hdc, up_card, COL_PANEL_ALT, COL_BORDER, 11);
-        draw_text(hdc, "HOST UPSCALER DLL FOLDER", RECT::new(up_card.left + 12, up_card.top + 6, up_card.right - 12, up_card.top + 24), ctx.fonts.small_bold, COL_CYAN, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
-        let up_path = if ctx.settings.upscaler_dir.is_empty() { "(None — click Browse)" } else { &ctx.settings.upscaler_dir };
-        draw_text(hdc, up_path, RECT::new(up_card.left + 12, up_card.top + 26, up_card.right - 190, up_card.bottom - 8), ctx.fonts.small, COL_MUTED, DT_LEFT | DT_VCENTER | DT_SINGLELINE | DT_PATH_ELLIPSIS);
-        let cl_up = RECT::new(up_card.right - 80, up_card.top + (last_h - 28) / 2, up_card.right - 10, up_card.top + (last_h + 28) / 2);
-        draw_button(hdc, cl_up, "CLEAR", ctx.fonts.small_bold, ctx.hover == Target::ClearUpscalerDir, COL_MUTED, Target::ClearUpscalerDir, &mut card_hits);
-        let br_up = RECT::new(cl_up.left - 98, cl_up.top, cl_up.left - 8, cl_up.bottom);
-        draw_button(hdc, br_up, "BROWSE...", ctx.fonts.small_bold, ctx.hover == Target::BrowseUpscalerDir, COL_CYAN, Target::BrowseUpscalerDir, &mut card_hits);
-
-        let sl_card = RECT::new(left_x + c2_w + c2_gap, y, left_x + inner_w, y + last_h);
+        // v1.6.2: NVIDIA-only path — the host upscaler DLL folder row has been removed.
+        let sl_card = RECT::new(left_x, y, left_x + inner_w, y + last_h);
         rounded_rect(hdc, sl_card, COL_PANEL_ALT, COL_BORDER, 11);
         draw_text(hdc, "SHADER LOOP LIMIT (VICTORY_SHADER_LOOP_LIMIT)", RECT::new(sl_card.left + 12, sl_card.top + 6, sl_card.right - 12, sl_card.top + 24), ctx.fonts.small_bold, COL_PINK, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
         let seg_gap = 6;
@@ -2713,7 +2718,7 @@ unsafe fn draw_bench_input(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Ve
     draw_text(hdc, "SESSION BENCHMARK LEADERBOARD", RECT::new(right_r.left + 14, right_top, right_r.right - 14, right_top + 20), ctx.fonts.small_bold, COL_ORANGE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
 
     if ctx.recent_sessions.is_empty() {
-        draw_text(hdc, "No recorded sessions yet.\n\nLaunch Title and play for a few seconds — GameMaster6 automatically logs FPS, duration, exit code, and slowest shader per runner.", RECT::new(right_r.left + 16, right_top + 26, right_r.right - 16, right_r.bottom - 16), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_WORDBREAK);
+        draw_text(hdc, "No recorded sessions yet.\n\nLaunch the runner and play for a few seconds — GameMaster6 automatically logs FPS, duration, exit code, and slowest shader per runner.", RECT::new(right_r.left + 16, right_top + 26, right_r.right - 16, right_r.bottom - 16), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_WORDBREAK);
         return;
     }
 
@@ -3010,7 +3015,7 @@ unsafe fn draw_dock(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
             hits,
         );
     } else {
-        draw_text(hdc, "System ready. Press LAUNCH Title (or Ctrl+L) to start, or PREPARE CACHE before your first session.", RECT::new(feed_r.left + 18, feed_r.top + 52, feed_r.right - 18, feed_r.bottom - 14), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_WORDBREAK);
+        draw_text(hdc, "System ready. Press LAUNCH (or Ctrl+L) to start, or PREPARE CACHE before your first session.", RECT::new(feed_r.left + 18, feed_r.top + 52, feed_r.right - 18, feed_r.bottom - 14), ctx.fonts.body, COL_MUTED, DT_LEFT | DT_WORDBREAK);
     }
 
     // Right: Launch Command Deck
@@ -3029,7 +3034,7 @@ unsafe fn draw_dock(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         FrameRect(hdc, &btn_r, br);
         DeleteObject(br);
     }
-    let btn_label = if active { "STOP RUNNER" } else { "LAUNCH Title" };
+    let btn_label = if active { "STOP RUNNER" } else { "LAUNCH" };
     draw_text(hdc, btn_label, btn_r, ctx.fonts.title, COL_WHITE, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
     hits.push((btn_r, Target::LaunchOrStop));
 

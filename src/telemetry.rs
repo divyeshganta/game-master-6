@@ -882,6 +882,32 @@ pub fn analyze_session_log(runner_name: &str, log_path: &Path, sys: &SystemInfo,
     }
 }
 
+/// v1.6.2: one-line bottleneck verdict for the LAST SESSION card.
+/// Compares `out of VRAM (39)` against Streamline `>100.00ms` resets in the newest log.
+pub fn session_bottleneck_verdict() -> String {
+    let latest = fs::read_dir(logs_dir())
+        .ok()
+        .and_then(|rd| {
+            rd.flatten()
+                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("log"))
+                .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+                .map(|e| e.path())
+        });
+    let Some(path) = latest else {
+        return "No session log to analyse".into();
+    };
+    let text = fs::read_to_string(&path).unwrap_or_default();
+    let vram_errors = text.matches("out of VRAM (39)").count();
+    let streamline_resets = text.matches(">100.00ms").count();
+    if vram_errors == 0 && streamline_resets == 0 {
+        "Healthy \u{00B7} 0 VRAM errors".into()
+    } else if vram_errors > streamline_resets {
+        "VRAM Ceiling \u{2014} lower Texture Room %".into()
+    } else {
+        "CPU/Sync Bound \u{2014} keep 2x FG on".into()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

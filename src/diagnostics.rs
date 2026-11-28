@@ -468,6 +468,26 @@ pub fn probe_top_ram_apps() -> Vec<(String, f64)> {
         .collect()
 }
 
+/// v1.6.2: the first run may record pipelines before they are warmed. Show a green tip.
+fn first_run_pipelines_pending(s: &Settings) -> bool {
+    let app = Settings::app_dir();
+    let cache = crate::runners::cache_dir_for(
+        &s.resolved_runner(),
+        s.active_runner_kind(),
+        s.isolated_cache,
+    );
+    for dir in [app.clone(), app.join("caches"), cache] {
+        let early = dir.join("early-pipelines.txt");
+        let done = dir.join("warm-done.txt");
+        if let Ok(meta) = std::fs::metadata(&early) {
+            if meta.len() > 0 && !done.exists() {
+                return true;
+            }
+        }
+    }
+    false
+}
+
 /// Builds a prioritized, process-aware System Tip banner from live hardware & process state.
 pub fn compute_system_tip(
     s: &Settings,
@@ -476,6 +496,14 @@ pub fn compute_system_tip(
     top_apps: &[(String, f64)],
     on_battery: bool,
 ) -> (bool, String) {
+    // v1.6.2: 16 GB RAM safety — recommend the VIRTUAL MEM button in SETTINGS.
+    if sys.total_ram_gb > 0.1 && sys.total_ram_gb <= 18.0 && sys.avail_commit_gb < 28.0 {
+        return (
+            true,
+            "16 GB RAM with low commit — open SETTINGS -> VIRTUAL MEM to raise the Windows paging file before launching.".into(),
+        );
+    }
+
     if (sys.avail_ram_gb > 0.1 && sys.avail_ram_gb < 18.0)
         || (sys.avail_commit_gb > 0.1 && sys.avail_commit_gb < 30.0)
     {
@@ -496,6 +524,13 @@ pub fn compute_system_tip(
             )
         };
         return (true, msg);
+    }
+
+    if first_run_pipelines_pending(s) {
+        return (
+            false,
+            "First run recorded pipelines — click PREPARE CACHE once to warm them for smoother FPS.".into(),
+        );
     }
 
     if sys.display_count > 1 && sys.vram_gb > 0.5 && sys.vram_gb <= 13.5 {

@@ -5,24 +5,56 @@ use crate::diagnostics::{GpuArch, SystemInfo};
 pub enum HardwareTier {
     Tight6,
     Tight8,
+    Mid10,
     Mid12,
     High16,
     Ultra20,
 }
 
+/// Math-backed, GiB-safe VRAM tier boundaries. Windows reports a 12 GB board as ~11.9 GiB,
+/// an 8 GB board as ~7.9 GiB and a 6 GB board as ~5.8-6.0 GiB, so probed GiB UNDER-reports
+/// nominal capacity. These floors were validated against real 4050/5070 Ti sessions.
+pub const VRAM_MIN_6GB_GIB: f64 = 5.5;
+pub const VRAM_MIN_8GB_GIB: f64 = 7.0;
+pub const VRAM_MIN_10GB_GIB: f64 = 9.5;
+pub const VRAM_MIN_12GB_GIB: f64 = 11.0;
+pub const VRAM_MIN_16GB_GIB: f64 = 13.5;
+pub const VRAM_MIN_20GB_GIB: f64 = 18.5;
+
+/// Normalise probed dedicated VRAM (GiB) onto a nominal tier size (GB).
+pub fn normalize_vram_gb(vram_gb: f64) -> f64 {
+    if vram_gb >= VRAM_MIN_20GB_GIB {
+        20.0
+    } else if vram_gb >= VRAM_MIN_16GB_GIB {
+        16.0
+    } else if vram_gb >= VRAM_MIN_12GB_GIB {
+        12.0
+    } else if vram_gb >= VRAM_MIN_10GB_GIB {
+        10.0
+    } else if vram_gb >= VRAM_MIN_8GB_GIB {
+        8.0
+    } else if vram_gb >= VRAM_MIN_6GB_GIB {
+        6.0
+    } else {
+        vram_gb
+    }
+}
+
 impl HardwareTier {
-    /// Classifies the host GPU from live probed dedicated VRAM (GB).
-    /// Falls back safely to Mid12 if VRAM probing is still in progress.
+    /// Classify probed dedicated VRAM into a safe tier. 0/undetected falls back to Mid12.
     pub fn from_vram_gb(vram_gb: f64) -> Self {
-        if vram_gb <= 0.5 {
+        let gb = normalize_vram_gb(vram_gb);
+        if gb <= 0.5 {
             HardwareTier::Mid12
-        } else if vram_gb <= 6.5 {
+        } else if gb <= 6.0 {
             HardwareTier::Tight6
-        } else if vram_gb <= 8.5 {
+        } else if gb <= 8.0 {
             HardwareTier::Tight8
-        } else if vram_gb <= 13.5 {
+        } else if gb <= 10.0 {
+            HardwareTier::Mid10
+        } else if gb <= 12.0 {
             HardwareTier::Mid12
-        } else if vram_gb <= 18.5 {
+        } else if gb <= 16.0 {
             HardwareTier::High16
         } else {
             HardwareTier::Ultra20
@@ -33,6 +65,7 @@ impl HardwareTier {
         match self {
             HardwareTier::Tight6 => "6GB TIER",
             HardwareTier::Tight8 => "8GB TIER",
+            HardwareTier::Mid10 => "10GB TIER",
             HardwareTier::Mid12 => "12GB TIER",
             HardwareTier::High16 => "16GB TIER",
             HardwareTier::Ultra20 => "20GB+ TIER",
@@ -123,75 +156,13 @@ pub struct NvidiaAuto {
     pub fg_type_auto: bool,      // VICTORY_MENU_FG_TYPE=auto (FSR3 FG 2x fallback on RTX 20/30)
 }
 
-/// Clean NVIDIA GPU Generation & VRAM Tier Auto-Detection (`AUTO (THIS PC)`).
+/// Math-backed NVIDIA GPU auto-tuning (`AUTO (THIS PC)`), derived from real VRAM testing.
+/// Tiers: 6 GB -> 60% + LOD, 8 GB -> 68% + LOD, 10 GB -> 80%, 12 GB+ -> 85%.
 pub fn nvidia_auto_preset(arch: GpuArch, vram_gb: f64) -> NvidiaAuto {
     let gen = NvidiaGen::detect(arch);
     let tier = HardwareTier::from_vram_gb(vram_gb);
-    match gen {
-        NvidiaGen::Rtx50 => {
-            // RTX 50 Series (12 GB+): Series X 1440p, DLSS Balanced, 2x FG (3x selectable), 85% room.
-            NvidiaAuto {
-                gen,
-                tier,
-                console_model: "series-x".into(),
-                display_mode: "2560x1440".into(),
-                dlss_mode: "balanced".into(),
-                framegen_x: 2,
-                texture_room_percent: "85".into(),
-                aggressive_idle_trim: false,
-                fg_type_auto: false,
-            }
-        }
-        NvidiaGen::Rtx40 => {
-            if tier == HardwareTier::Tight6 {
-                // RTX 40 6 GB (e.g. RTX 4050 Laptop 6 GB): safe 1080p, DLSS Performance, 2x FG, 70% room, aggressive idle trim.
-                NvidiaAuto {
-                    gen,
-                    tier,
-                    console_model: "series-s".into(),
-                    display_mode: "1920x1080".into(),
-                    dlss_mode: "performance".into(),
-                    framegen_x: 2,
-                    texture_room_percent: "70".into(),
-                    aggressive_idle_trim: true,
-                    fg_type_auto: false,
-                }
-            } else {
-                // RTX 40 8-12 GB: Series X 1440p/1080p, DLSS Performance/Balanced, 2x FG, 74-82% room.
-                let dlss_mode = if tier >= HardwareTier::Mid12 { "balanced" } else { "performance" };
-                let display_mode = if tier >= HardwareTier::Mid12 { "2560x1440" } else { "1920x1080" };
-                let texture_room_percent = if tier >= HardwareTier::Mid12 { "82".into() } else { "74".into() };
-                NvidiaAuto {
-                    gen,
-                    tier,
-                    console_model: "series-x".into(),
-                    display_mode: display_mode.into(),
-                    dlss_mode: dlss_mode.into(),
-                    framegen_x: 2,
-                    texture_room_percent,
-                    aggressive_idle_trim: false,
-                    fg_type_auto: false,
-                }
-            }
-        }
-        NvidiaGen::Rtx20_30 => {
-            // RTX 20 / 30 Series: DLSS Super Resolution + VICTORY_MENU_FG_TYPE=auto (FSR3 FG 2x fallback).
-            let display_mode = if tier <= HardwareTier::Tight8 { "1920x1080".into() } else { "2560x1440".into() };
-            let dlss_mode = if tier <= HardwareTier::Tight8 { "performance".into() } else { "balanced".into() };
-            let texture_room_percent = if tier <= HardwareTier::Tight8 { "74".into() } else { "85".into() };
-            NvidiaAuto {
-                gen,
-                tier,
-                console_model: if tier <= HardwareTier::Tight8 { "series-s".into() } else { "series-x".into() },
-                display_mode,
-                dlss_mode,
-                framegen_x: 2,
-                texture_room_percent,
-                aggressive_idle_trim: tier == HardwareTier::Tight6,
-                fg_type_auto: true,
-            }
-        }
-        NvidiaGen::NonNvidia => NvidiaAuto {
+    if !gen.is_nvidia() {
+        return NvidiaAuto {
             gen,
             tier,
             console_model: "series-s".into(),
@@ -201,7 +172,25 @@ pub fn nvidia_auto_preset(arch: GpuArch, vram_gb: f64) -> NvidiaAuto {
             texture_room_percent: "70".into(),
             aggressive_idle_trim: false,
             fg_type_auto: false,
-        },
+        };
+    }
+    let (console, res, dlss, room, aggressive) = match tier {
+        HardwareTier::Tight6 => ("series-s", "1920x1080", "performance", "60", true),
+        HardwareTier::Tight8 => ("series-s", "1920x1080", "performance", "68", true),
+        HardwareTier::Mid10 => ("series-x", "2560x1440", "performance", "80", false),
+        _ => ("series-x", "2560x1440", "balanced", "85", false),
+    };
+    NvidiaAuto {
+        gen,
+        tier,
+        console_model: console.into(),
+        display_mode: res.into(),
+        dlss_mode: dlss.into(),
+        framegen_x: 2,
+        texture_room_percent: room.into(),
+        aggressive_idle_trim: aggressive,
+        // RTX 20/30 need the FSR3 frame-gen fallback; 40/50 use native DLSS FG.
+        fg_type_auto: gen == NvidiaGen::Rtx20_30,
     }
 }
 
@@ -244,7 +233,8 @@ pub fn apply_adaptive_preset(s: &mut Settings, preset: PresetKind, sys: &SystemI
     s.wide_refresh = true;
     s.wide_merge = true;
     s.fast_cores = sys.cpu_cores >= 8;
-    s.levels_on_demand = true;
+    // 6/8 GB boards stream levels on demand (LOD=1); 10/12 GB+ preload (LOD=0).
+    s.levels_on_demand = tier <= HardwareTier::Tight8;
     s.no_wait_resident = true;
     s.ambient_fill = true;
     s.relay_mode = 2;
@@ -346,17 +336,19 @@ fn gen_name(gen: NvidiaGen) -> &'static str {
 fn low_room(gen: NvidiaGen, tier: HardwareTier) -> String {
     let _ = gen;
     match tier {
-        HardwareTier::Tight6 => "70".into(),
-        HardwareTier::Tight8 => "74".into(),
-        _ => "80".into(),
+        HardwareTier::Tight6 => "60".into(),
+        HardwareTier::Tight8 => "68".into(),
+        HardwareTier::Mid10 => "80".into(),
+        _ => "85".into(),
     }
 }
 
 fn balanced_room(gen: NvidiaGen, tier: HardwareTier) -> String {
+    let _ = gen;
     match tier {
-        HardwareTier::Tight6 => "70".into(),
-        HardwareTier::Tight8 => "74".into(),
-        HardwareTier::Mid12 => if gen == NvidiaGen::Rtx40 { "82".into() } else { "85".into() },
+        HardwareTier::Tight6 => "60".into(),
+        HardwareTier::Tight8 => "68".into(),
+        HardwareTier::Mid10 => "80".into(),
         _ => "85".into(),
     }
 }
@@ -364,8 +356,9 @@ fn balanced_room(gen: NvidiaGen, tier: HardwareTier) -> String {
 fn high_room(gen: NvidiaGen, tier: HardwareTier) -> String {
     let _ = gen;
     match tier {
-        HardwareTier::Tight6 => "70".into(),
-        HardwareTier::Tight8 => "74".into(),
+        HardwareTier::Tight6 => "60".into(),
+        HardwareTier::Tight8 => "68".into(),
+        HardwareTier::Mid10 => "80".into(),
         _ => "85".into(),
     }
 }
@@ -446,33 +439,64 @@ mod tests {
         let a8 = nvidia_auto_preset(GpuArch::NvidiaAdaAmpere, 8.0);
         assert_eq!(a8.gen, NvidiaGen::Rtx40);
         assert_eq!(a8.framegen_x, 2);
-        assert!((74..=82).contains(&a8.texture_room_percent.parse::<u32>().unwrap()));
+        assert_eq!(a8.texture_room_percent, "68");
+        assert_eq!(a8.console_model, "series-s");
+        assert_eq!(a8.display_mode, "1920x1080");
+        assert_eq!(a8.dlss_mode, "performance");
         let a12 = nvidia_auto_preset(GpuArch::NvidiaAdaAmpere, 12.0);
         assert_eq!(a12.dlss_mode, "balanced");
-        assert!((74..=82).contains(&a12.texture_room_percent.parse::<u32>().unwrap()));
-        assert!(a12.display_mode == "2560x1440" || a12.display_mode == "1920x1080");
+        assert_eq!(a12.texture_room_percent, "85");
+        assert_eq!(a12.display_mode, "2560x1440");
+        assert_eq!(a12.console_model, "series-x");
     }
 
     #[test]
-    fn rtx40_6gb_safe_70_and_aggressive_trim() {
+    fn rtx40_6gb_safe_60_and_aggressive_trim() {
         let a = nvidia_auto_preset(GpuArch::NvidiaAdaAmpere, 6.0);
         assert_eq!(a.gen, NvidiaGen::Rtx40);
         assert_eq!(a.tier, HardwareTier::Tight6);
         assert_eq!(a.display_mode, "1920x1080");
         assert_eq!(a.dlss_mode, "performance");
         assert_eq!(a.framegen_x, 2);
-        assert_eq!(a.texture_room_percent, "70");
+        assert_eq!(a.texture_room_percent, "60");
         assert!(a.aggressive_idle_trim);
         // RTX 4050 Laptop 6 GB naming maps to Tight6
         assert_eq!(HardwareTier::from_vram_gb(6.0), HardwareTier::Tight6);
     }
 
     #[test]
-    fn rtx4050_6gb_apply_emits_70_and_trim() {
+    fn rtx4050_6gb_apply_emits_60_and_trim() {
         let mut s = Settings::default();
         let _ = apply_adaptive_preset(&mut s, PresetKind::Auto, &sys(GpuArch::NvidiaAdaAmpere, 6.0));
-        assert_eq!(s.texture_room_percent, "70");
+        assert_eq!(s.texture_room_percent, "60");
         assert_eq!(s.dlss_mode, "performance");
+        assert!(s.levels_on_demand);
+    }
+
+    /// Math-backed universal tiering: 6 -> 60%+LOD, 8 -> 68%+LOD, 10 -> 80%, 11.9 -> 85%+no LOD.
+    #[test]
+    fn universal_nvidia_vram_tiers() {
+        let cases: [(f64, &str, &str, &str, &str, bool); 4] = [
+            (6.0, "60", "series-s", "1920x1080", "performance", true),
+            (8.0, "68", "series-s", "1920x1080", "performance", true),
+            (10.0, "80", "series-x", "2560x1440", "performance", false),
+            (11.9, "85", "series-x", "2560x1440", "balanced", false),
+        ];
+        for (vram, room, console, res, dlss, lod) in cases {
+            let a = nvidia_auto_preset(GpuArch::NvidiaBlackwell, vram);
+            assert_eq!(a.texture_room_percent, room, "room @ {vram} GB");
+            assert_eq!(a.console_model, console, "console @ {vram} GB");
+            assert_eq!(a.display_mode, res, "resolution @ {vram} GB");
+            assert_eq!(a.dlss_mode, dlss, "DLSS @ {vram} GB");
+            assert_eq!(a.framegen_x, 2, "FG @ {vram} GB");
+            let mut s = Settings::default();
+            let _ = apply_adaptive_preset(&mut s, PresetKind::Auto, &sys(GpuArch::NvidiaBlackwell, vram));
+            assert_eq!(s.levels_on_demand, lod, "LEVELS_ON_DEMAND @ {vram} GB");
+        }
+        assert_eq!(HardwareTier::from_vram_gb(11.9), HardwareTier::Mid12);
+        assert_eq!(HardwareTier::from_vram_gb(10.0), HardwareTier::Mid10);
+        assert_eq!(HardwareTier::from_vram_gb(8.0), HardwareTier::Tight8);
+        assert_eq!(HardwareTier::from_vram_gb(6.0), HardwareTier::Tight6);
     }
 
     #[test]
@@ -529,14 +553,14 @@ mod tests {
         assert!(crate::diagnostics::is_nvidia_gpu(hybrid));
         assert_eq!(crate::diagnostics::GpuArch::detect(hybrid), crate::diagnostics::GpuArch::NvidiaBlackwell);
         assert!(NvidiaGen::non_nvidia_warning().contains("NVIDIA RTX"));
-        let a = nvidia_auto_preset(arch, 12.0);
+        let a = nvidia_auto_preset(arch, 11.9);
         assert_eq!(a.console_model, "series-x");
         assert_eq!(a.display_mode, "2560x1440");
         assert_eq!(a.dlss_mode, "balanced");
         assert_eq!(a.framegen_x, 2);
         assert_eq!(a.texture_room_percent, "85");
         let mut s = Settings::default();
-        let mut info = sys(arch, 12.0);
+        let mut info = sys(arch, 11.9);
         info.gpu_name = name.into();
         let _ = apply_adaptive_preset(&mut s, PresetKind::Auto, &info);
         assert_eq!(s.console_model, "series-x");
@@ -545,16 +569,18 @@ mod tests {
         assert_eq!(s.framegen_x, 2);
         assert_eq!(s.texture_room_percent, "85");
         assert_eq!(s.active_preset, "auto");
+        assert!(!s.levels_on_demand);
     }
 
     #[test]
     fn rtx5070ti_12gb_auto_emits_85_and_no_card_room() {
         let mut s = Settings::default();
-        let _ = apply_adaptive_preset(&mut s, PresetKind::Auto, &sys(GpuArch::NvidiaBlackwell, 12.0));
+        let _ = apply_adaptive_preset(&mut s, PresetKind::Auto, &sys(GpuArch::NvidiaBlackwell, 11.9));
         assert_eq!(s.texture_room_percent, "85");
         assert_eq!(s.dlss_mode, "balanced");
         assert_eq!(s.framegen_x, 2);
         assert_eq!(s.console_model, "series-x");
         assert_eq!(s.display_mode, "2560x1440");
+        assert!(!s.levels_on_demand);
     }
 }

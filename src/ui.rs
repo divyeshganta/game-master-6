@@ -334,6 +334,29 @@ unsafe fn show_msg(hwnd: HWND, body: &str, title: &str, flags: UINT) -> c_int {
     MessageBoxW(hwnd, b.as_ptr(), t.as_ptr(), flags)
 }
 
+/// v1.6.2 fresh-PC guard used by both LAUNCH and PREPARE CACHE.
+/// Auto-selects an installed runner when the active binary is missing; otherwise redirects
+/// to the RUNNERS tab with a clear status prompt (never spawns a missing exe).
+unsafe fn ensure_runner_or_redirect(st: &mut AppState, hwnd: HWND) -> bool {
+    if st.settings.resolved_runner().is_file() {
+        return true;
+    }
+    match launcher::guard_runner_available(&mut st.settings) {
+        Ok(()) => {
+            let _ = st.settings.save();
+            true
+        }
+        Err(msg) => {
+            st.view = 1; // RUNNERS
+            st.status_text = launcher::missing_runner_hint().to_string();
+            st.status_kind = StatusKind::Warning;
+            st.set_toast(msg);
+            redraw(hwnd);
+            false
+        }
+    }
+}
+
 unsafe fn handle_launch_or_stop(hwnd: HWND) {
     let st = state(hwnd);
     if let Some(mut sess) = st.session.take() {
@@ -357,13 +380,18 @@ unsafe fn handle_launch_or_stop(hwnd: HWND) {
         return;
     }
 
+    if !ensure_runner_or_redirect(st, hwnd) {
+        return;
+    }
     if st.settings.auto_backup_saves {
         let _ = saves::backup_saves();
         st.backup_count = saves::count_backups();
     }
     // AUTO (THIS PC): resolve NVIDIA generation + VRAM tiering before launch.
     if st.settings.active_preset.eq_ignore_ascii_case("auto") || st.settings.active_preset.is_empty() {
-        let _ = crate::presets::apply_adaptive_preset(&mut st.settings, crate::presets::PresetKind::Auto, &st.sys);
+        let msg = crate::presets::apply_adaptive_preset(&mut st.settings, crate::presets::PresetKind::Auto, &st.sys);
+        // Persist the resolved AUTO settings so UI pills reflect the GPU tier immediately.
+        st.save_settings(&msg);
     }
     match launcher::start(&st.settings, &st.sys) {
         Ok(sess) => {
@@ -412,6 +440,10 @@ unsafe fn handle_prepare(hwnd: HWND) {
         return;
     }
 
+    if !ensure_runner_or_redirect(st, hwnd) {
+        return;
+    }
+
     if st.audit.shader_cache_ready {
         let ans = show_msg(
             hwnd,
@@ -431,6 +463,8 @@ unsafe fn handle_prepare(hwnd: HWND) {
 
     match launcher::prepare(&st.settings, st.sys.recommended_jobs()) {
         Ok(sess) => {
+            // v1.6.2: a successful cache preparation invalidates any stale crash card.
+            st.last_crash = None;
             st.settings.last_prepared_runner_sig = st.settings.runner_signature();
             let _ = st.settings.save();
             st.status_text = "PREPARING".into();
@@ -2174,9 +2208,10 @@ unsafe fn on_timer(hwnd: HWND) {
                 st.gpu_rx = None;
                 if st.is_first_run || st.settings.active_preset.eq_ignore_ascii_case("auto") {
                     st.is_first_run = false;
+                    // v1.6.2: startup AUTO must resolve the hardware tier, not downgrade to BALANCED.
                     let _ = crate::presets::apply_adaptive_preset(
                         &mut st.settings,
-                        crate::presets::PresetKind::Balanced,
+                        crate::presets::PresetKind::Auto,
                         &st.sys,
                     );
                     let _ = st.settings.save();
@@ -2251,7 +2286,7 @@ unsafe fn on_timer(hwnd: HWND) {
                     sess.window_closed_at = None;
                     if !sess.window_branded {
                         let ico = Settings::app_dir().join("logo.ico");
-                        if unsafe { brand_runner_window(pid, "Title", &ico, true) } {
+                        if unsafe { brand_runner_window(pid, "GAME MASTER", &ico, true) } {
                             sess.window_branded = true;
                         }
                     }
@@ -2979,7 +3014,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
 
 pub fn run() {
     std::panic::set_hook(Box::new(|info| {
-        let text = format!("GameMaster6 v1.6.1 error:\n\n{info}");
+        let text = format!("GameMaster6 v1.6.2 error:\n\n{info}");
         let dir = Settings::app_dir().join("logs");
         let _ = std::fs::create_dir_all(&dir);
         let _ = std::fs::write(dir.join("crash.txt"), &text);
@@ -3012,7 +3047,7 @@ pub fn run() {
         }
 
         let class = wide("GameMasterViceV2Class");
-        let title = wide("GameMaster6 v1.6.1");
+        let title = wide("GameMaster6 v1.6.2");
         let hinst = GetModuleHandleW(std::ptr::null());
         let wc = WNDCLASSEXW {
             cb_size: std::mem::size_of::<WNDCLASSEXW>() as UINT,

@@ -295,6 +295,57 @@ fn validate_core(s: &Settings) -> Result<(), String> {
     }
 }
 
+/// Fresh-PC fix (v1.6.2): always create runtime directories before spawning victory.exe (os error 3).
+/// Creates `VICTORY_CACHE_DIR`, `VICTORY_DATA_DIR`, `logs/`, and `backups/saves/`. Never deletes or rewrites contents.
+pub fn ensure_runtime_dirs(s: &Settings, runner_path: &Path, cache_dir: &Path) {
+    let _ = std::fs::create_dir_all(cache_dir); // VICTORY_CACHE_DIR
+    if let Some(vault) = crate::saves::shared_save_vault_dir() {
+        let _ = std::fs::create_dir_all(&vault); // VICTORY_DATA_DIR
+    }
+    if let Some(data) = crate::runners::default_victory_data_dir() {
+        let _ = std::fs::create_dir_all(&data); // VICTORY_DATA_DIR fallback
+    }
+    let _ = std::fs::create_dir_all(crate::diagnostics::logs_dir()); // logs/
+    let _ = std::fs::create_dir_all(crate::saves::backups_dir()); // backups/
+    let _ = std::fs::create_dir_all(crate::saves::saves_backups_dir()); // backups/saves/
+    let _ = s;
+    let _ = runner_path;
+}
+
+/// v1.6.2 fresh-PC guard. If the configured runner binary is missing, auto-select an
+/// installed Victory-family runner (falling back to any installed runner). When nothing
+/// is installed, return an actionable message instead of letting the spawn fail with
+/// `os error 3` / `EXIT 0x00000001`.
+pub fn guard_runner_available(s: &mut Settings) -> Result<(), &'static str> {
+    if s.resolved_runner().is_file() {
+        return Ok(());
+    }
+    let candidates = crate::runners::discover_runners(s);
+    let pick = candidates
+        .iter()
+        .find(|r| r.kind.is_victory_family() && r.path.is_file())
+        .or_else(|| candidates.iter().find(|r| r.path.is_file()));
+    if let Some(p) = pick {
+        s.runner = p.path.to_string_lossy().into_owned();
+        s.runner_kind = p.kind.id().to_string();
+        Ok(())
+    } else {
+        Err("Install Victory-NVIDIA first — open RUNNERS, then GET/BUILD trustno1-coder/VIctory-NVIDIA.")
+    }
+}
+
+/// Short status hint used when redirecting to the RUNNERS tab.
+pub fn missing_runner_hint() -> &'static str {
+    "Install Victory-NVIDIA first"
+}
+
+/// v1.6.2: `warm` legitimately reports "no pipelines recorded" / "0 pipelines known" on a
+/// fresh PC before the first play. That is a successful preparation, not a crash.
+pub fn is_benign_no_pipelines_output(text: &str) -> bool {
+    let t = text.to_ascii_lowercase();
+    t.contains("no pipelines recorded") || t.contains("0 pipelines known")
+}
+
 pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
     validate_core(s)?;
 
@@ -479,6 +530,8 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
         }
     }
 
+    // v1.6.2 fresh-PC: create runtime dirs before spawning victory.exe (os error 3).
+    ensure_runtime_dirs(s, &runner_path, &cache_dir_for(&runner_path, kind, s.isolated_cache));
     let child = cmd
         .spawn()
         .map_err(|e| format!("Failed to start runner '{}': {e}", runner_path.display()))?;
@@ -647,9 +700,16 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
         let e_esc = exe.to_string_lossy().replace('\'', "''");
         let b_esc = bvh.to_string_lossy().replace('\'', "''");
         let u_esc = upscaler.to_string_lossy().replace('\'', "''");
+        // v1.6.2 fresh-PC fix: `warm` reports "no pipelines recorded"/"0 pipelines known"
+        // before the first play. Normalise that benign outcome to exit 0 so PREPARE CACHE
+        // succeeds instead of producing a red CRASH SUMMARY / os error 3 card.
         let ps = format!(
             "& '{r_esc}' shaders --jobs {jobs} '{s_esc}' '{e_esc}' '{b_esc}' '{u_esc}'; \
-             if ($LASTEXITCODE -eq 0) {{ & '{r_esc}' warm }}"
+             if ($LASTEXITCODE -eq 0) {{ \
+               $warmOut = & '{r_esc}' warm 2>&1 | Out-String; \
+               if ($LASTEXITCODE -ne 0 -and ($warmOut -match 'no pipelines recorded|0 pipelines known')) {{ exit 0 }} \
+             }}; \
+             exit $LASTEXITCODE"
         );
         c.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", &ps]);
         #[cfg(windows)]
@@ -702,6 +762,8 @@ pub fn prepare(s: &Settings, jobs: u32) -> Result<ActiveSession, String> {
     for (key, val) in build_victory_env(s) {
         pcmd.env(key, val);
     }
+    // v1.6.2 fresh-PC: create runtime dirs before spawning victory.exe (os error 3).
+    ensure_runtime_dirs(s, &runner_path, &cache_dir);
     let child = pcmd
         .spawn()
         .map_err(|e| format!("Failed to start shader preparation: {e}"))?;
@@ -1120,7 +1182,7 @@ pub fn resolve_victory_launch_env(
         set("VICTORY_TEXTURE_NO_WAIT", "1".into());
         set("VICTORY_TEXTURE_CATCHUP", "1".into());
         set("VICTORY_TEXTURE_STAGE_MS", "16".into());
-        set("VICTORY_LEVELS_ON_DEMAND", "0".into());
+        set("VICTORY_LEVELS_ON_DEMAND", if s.levels_on_demand { "1".into() } else { "0".into() });
         set("VICTORY_PRELUDE_UPLOADS", "1".into());
         set("VICTORY_SHOW_NEW_LATER", "0".into());
         set("VICTORY_POOL_SMALL", "0".into());
@@ -1155,7 +1217,7 @@ pub fn resolve_victory_launch_env(
         set("VICTORY_FRAME_INTERVAL_US", "1000".into());
 
         let tex_room = if s.texture_room_percent.trim().is_empty() {
-            if sys.vram_gb <= 8.5 { "72" } else if sys.vram_gb <= 13.5 { "85" } else { "86" }
+            if sys.vram_gb < 7.0 { "60" } else if sys.vram_gb < 9.5 { "68" } else if sys.vram_gb < 11.0 { "80" } else { "85" }
         } else {
             s.texture_room_percent.trim()
         };
@@ -1423,5 +1485,42 @@ mod tests {
         let s = Settings::parse_from_str(legacy);
         assert!(s.mouse_capture);
         assert!(s.borderless);
+    }
+
+    #[test]
+    fn fresh_pc_no_pipelines_is_benign() {
+        assert!(is_benign_no_pipelines_output("warm: no pipelines recorded"));
+        assert!(is_benign_no_pipelines_output("0 pipelines known"));
+        assert!(!is_benign_no_pipelines_output("shader compile failed"));
+    }
+
+    #[test]
+    fn fresh_pc_runtime_dirs_are_created() {
+        let s = Settings::default();
+        let tmp = std::env::temp_dir().join(format!("gm_dirs_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        ensure_runtime_dirs(&s, Path::new("victory.exe"), &tmp);
+        assert!(tmp.is_dir());
+        assert!(crate::diagnostics::logs_dir().is_dir());
+        assert!(crate::saves::backups_dir().is_dir());
+        assert!(crate::saves::saves_backups_dir().is_dir());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn missing_runner_guard_auto_selects_or_reports_actionable_error() {
+        let mut s = Settings::default();
+        s.runner = std::env::temp_dir()
+            .join(format!("gm_missing_runner_{}.exe", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        assert!(!s.resolved_runner().is_file());
+        match guard_runner_available(&mut s) {
+            Ok(()) => assert!(s.resolved_runner().is_file(), "selected runner must exist"),
+            Err(msg) => assert!(
+                msg.contains(missing_runner_hint()),
+                "error must be actionable: {msg}"
+            ),
+        }
     }
 }

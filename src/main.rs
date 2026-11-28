@@ -32,13 +32,15 @@ mod mojibake_lock {
     #[test]
     fn no_utf8_mojibake_in_src_rs_files() {
         let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let needles: [&str; 6] = [
+        let needles: [&str; 8] = [
             "\u{00C2}\u{00B7}",
             "\u{00E2}\u{0153}",
             "\u{00E2}\u{2013}",
             "\u{00E2}\u{20AC}",
             "\u{00E2}\u{02DC}",
             "\u{00C3}\u{2014}",
+            "\u{00E2}\u{2014}\u{2039}",
+            "\u{00E2}\u{2014}",
         ];
         let mut offenders = Vec::new();
         for entry in std::fs::read_dir(&src_dir).expect("read src dir").flatten() {

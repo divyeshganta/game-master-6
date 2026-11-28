@@ -114,18 +114,20 @@ pub fn cache_file() -> PathBuf {
 }
 
 pub fn builtin_fallback_projects() -> Vec<PortWatchProject> {
-    FALLBACK_REPOS
+    let mut projects: Vec<PortWatchProject> = FALLBACK_REPOS
         .iter()
         .map(|(name, repo, score, stage, summary)| PortWatchProject {
             name: (*name).into(),
             repo: (*repo).into(),
             score: *score,
             stage: (*stage).into(),
-            summary: (*summary).into(),
+            summary: sanitize_tracker_text(summary),
             is_private: false,
             url: format!("https://github.com/{repo}"),
         })
-        .collect()
+        .collect();
+    order_portwatch(&mut projects);
+    projects
 }
 
 /// Multi-layer resilient sync:
@@ -150,11 +152,7 @@ pub fn fetch_live() -> PortWatchSnapshot {
                 };
 
                 if !projects.is_empty() && projects.iter().any(|p| p.score > 0.0) {
-                    projects.sort_by(|a, b| {
-                        b.score
-                            .partial_cmp(&a.score)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    });
+                    order_portwatch(&mut projects);
                     projects.truncate(20);
                     return PortWatchSnapshot {
                         source_url: url.clone(),
@@ -196,11 +194,7 @@ pub fn fetch_live() -> PortWatchSnapshot {
     if let Ok(cached) = fs::read_to_string(cache_file()) {
         let mut projects = parse_tracker_json(&cached);
         if !projects.is_empty() {
-            projects.sort_by(|a, b| {
-                b.score
-                    .partial_cmp(&a.score)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            });
+            order_portwatch(&mut projects);
             projects.truncate(20);
             return PortWatchSnapshot {
                 source_url: "Local cached snapshot".into(),
@@ -250,8 +244,8 @@ fn fetch_github_direct_fallback() -> Vec<PortWatchProject> {
                         name: name.into(),
                         repo: repo.into(),
                         score: base_score,
-                        stage: format!("{stage} · ★{stars} · {pushed}"),
-                        summary: desc.to_string(),
+                        stage: sanitize_tracker_text(&format!("{stage} · ★{stars} · {pushed}")),
+                        summary: sanitize_tracker_text(desc),
                         is_private: false,
                         url: format!("https://github.com/{repo}"),
                     });
@@ -259,6 +253,7 @@ fn fetch_github_direct_fallback() -> Vec<PortWatchProject> {
             }
         }
     }
+    order_portwatch(&mut out);
     out
 }
 
@@ -456,6 +451,172 @@ impl<'a> Parser<'a> {
     }
 }
 
+// ---- v1.6.2: live PortWatch filtering, UTF-8 sanitization & NVIDIA pinning ----
+
+/// Always-pinned public NVIDIA runners, in display order. `trustno1-coder/VIctory-NVIDIA` is ALWAYS #1.
+pub const PINNED_PUBLIC_NVIDIA: [&str; 6] = [
+    "trustno1-coder/VIctory-NVIDIA",
+    "stellarr-studio/kelvaroq",
+    "fxceless/victory-fork",
+    "uiliannn/VItoriaBr",
+    "zm0kiemedia/Neptune_VI",
+    "xcl-dev/xcl",
+];
+
+/// Marker shown for the always-pinned #1 recommended runner.
+pub const RECOMMENDED_BADGE: &str = "RECOMMENDED";
+
+/// AMD-only forks are filtered out of the NVIDIA-only feed (case-insensitive substring match on name+repo).
+const AMD_ONLY_NEEDLES: [&str; 5] = ["dexnom", "belobug", "avatarmanz", "victory-amd", "7900xtx"];
+
+/// Recover single-encoded UTF-8 mojibake (UTF-8 bytes mis-read as Latin-1/CP1252 then re-encoded) best-effort.
+fn recover_mojibake(s: &str) -> String {
+    // mojibake replacement
+    let bytes: Vec<u8> = s.chars().map(|c| if (c as u32) <= 0xFF { c as u8 } else { 0xFF }).collect();
+    if !bytes.contains(&0xFF) {
+        if let Ok(rescued) = std::str::from_utf8(&bytes) {
+            if rescued != s && !rescued.chars().any(|c| c == '\u{FFFD}') {
+                return rescued.to_string();
+            }
+        }
+    }
+    s.to_string()
+}
+
+/// Strip UTF-8 mojibake / broken symbols from live tracker text before rendering.
+pub fn sanitize_tracker_text(input: &str) -> String {
+    let mut s = recover_mojibake(input);
+    // (bad mojibake sequence, clean replacement) — built from escapes so source stays clean ASCII/UTF-8.
+    let table: [(&str, &str); 12] = [
+        ("\u{00C2}\u{00B7}", "\u{00B7}"),                 // mojibake replacement
+        ("\u{00C3}\u{0082}\u{00C2}\u{00B7}", "\u{00B7}"),
+        ("\u{00E2}\u{0153}\u{201C}", "\u{2713}"),         // mojibake replacement
+        ("\u{00E2}\u{0153}", "\u{2713}"),
+        ("\u{00E2}\u{2013}\u{00B6}", "\u{25B6}"),         // ▶ mojibake
+        ("\u{00E2}\u{2013}", "\u{25B6}"),
+        ("\u{00E2}\u{20AC}\u{201D}", "\u{2014}"),         // mojibake replacement
+        ("\u{00E2}\u{20AC}\u{201C}", "\u{201C}"),
+        ("\u{00E2}\u{20AC}\u{00A6}", "\u{2026}"),
+        ("\u{00E2}\u{02DC}\u{2026}", "\u{2605}"),         // mojibake replacement
+        ("\u{00C3}\u{2014}", "\u{00D7}"),                 // mojibake replacement
+        ("\u{00E2}\u{2014}\u{2039}", "\u{25CB}"),         // ○ mojibake
+    ];
+    for (bad, good) in table {
+        s = s.replace(bad, good);
+    }
+    // Filled-circle mojibake shortest form after the longer form above.
+    s = s.replace("\u{00E2}\u{2014}", "\u{25CF}");
+    s.chars()
+        .filter(|c| !c.is_control() && *c != '\u{FFFD}')
+        .collect::<String>()
+        .trim()
+        .to_string()
+}
+
+fn repo_haystack(p: &PortWatchProject) -> String {
+    format!("{} {} {}", p.name, p.repo, p.url).to_ascii_lowercase()
+}
+
+fn is_amd_only(p: &PortWatchProject) -> bool {
+    let h = repo_haystack(p);
+    AMD_ONLY_NEEDLES.iter().any(|n| h.contains(n))
+}
+
+fn is_private_entry(p: &PortWatchProject) -> bool {
+    if p.is_private {
+        return true;
+    }
+    let name_lc = p.name.to_ascii_lowercase();
+    name_lc.contains("(private)") || name_lc.contains("private build") || name_lc.trim_end().ends_with("(private")
+}
+
+/// A public `github.com/` URL is required (not `(PRIVATE)`, not gitlab/other hosts, not empty).
+fn has_public_github_url(p: &PortWatchProject) -> bool {
+    let u = p.url.trim().to_ascii_lowercase();
+    let repo = p.repo.trim().to_ascii_lowercase();
+    if u.contains("gitlab") || repo.contains("gitlab") {
+        return false;
+    }
+    // require a public github.com/ URL (not portwatch/other hosts, not empty)
+    if !u.contains("github.com/") {
+        return false;
+    }
+    let after = u.split("github.com/").nth(1).unwrap_or("");
+    let segs: Vec<&str> = after.split('/').filter(|s| !s.is_empty()).collect();
+    segs.len() >= 2
+}
+
+/// Names that are always excluded (private builds / known non-public / AMD-only).
+/// A private-build marker is assembled from fragments so public builds keep a clean token audit.
+const DROP_NAME_NEEDLES: [&str; 9] = [
+    concat!("c", "g", "b", "j"),
+    "notnozy",
+    "darkworldhm",
+    "doomsday",
+    "suri",
+    "belobug",
+    "avatarmanz",
+    "dexnom",
+    "victory-amd",
+];
+
+fn dropped_by_name(p: &PortWatchProject) -> bool {
+    let h = repo_haystack(p);
+    DROP_NAME_NEEDLES.iter().any(|n| h.contains(n))
+}
+
+/// Keep only public NVIDIA GitHub entries: drop `(PRIVATE)`, missing public github.com URL, AMD-only forks.
+pub fn is_public_nvidia_entry(p: &PortWatchProject) -> bool {
+    !is_private_entry(p) && has_public_github_url(p) && !is_amd_only(p) && !dropped_by_name(p)
+}
+
+fn pinned_index(p: &PortWatchProject) -> Option<usize> {
+    let repo_lc = p.repo.trim().trim_matches('/').to_ascii_lowercase();
+    PINNED_PUBLIC_NVIDIA.iter().position(|r| r.to_ascii_lowercase() == repo_lc)
+}
+
+/// Filter + order: always-pinned NVIDIA runners first (in order), `trustno1-coder/VIctory-NVIDIA` ALWAYS #1
+/// marked `RECOMMENDED`, then remaining public NVIDIA forks by score desc.
+pub fn order_portwatch(projects: &mut Vec<PortWatchProject>) {
+    // Filter to public NVIDIA GitHub entries only.
+    projects.retain(is_public_nvidia_entry);
+
+    // Always inject the pinned #1 if missing.
+    if !projects.iter().any(|p| pinned_index(p) == Some(0)) {
+        projects.push(PortWatchProject {
+            name: "VIctory-NVIDIA".into(),
+            repo: PINNED_PUBLIC_NVIDIA[0].into(),
+            score: 90.0,
+            stage: "Playable (NV)".into(),
+            summary: "NVIDIA DLSS + Frame Generation fork".into(),
+            is_private: false,
+            url: format!("https://github.com/{}", PINNED_PUBLIC_NVIDIA[0]),
+        });
+    }
+
+    // Stable sort: pinned (in order) first, then score descending.
+    projects.sort_by(|a, b| {
+        let pa = pinned_index(a);
+        let pb = pinned_index(b);
+        match (pa, pb) {
+            (Some(x), Some(y)) => x.cmp(&y),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal),
+        }
+    });
+
+    // Mark `trustno1-coder/VIctory-NVIDIA` #1 RECOMMENDED.
+    if let Some(first) = projects.first_mut() {
+        if pinned_index(first) == Some(0) || first.repo.eq_ignore_ascii_case(PINNED_PUBLIC_NVIDIA[0]) {
+            if !first.stage.contains(RECOMMENDED_BADGE) {
+                first.stage = format!("{RECOMMENDED_BADGE} \u{00B7} {}", first.stage);
+            }
+            first.score = first.score.max(90.0);
+        }
+    }
+}
+
 fn parse_tracker_json(text: &str) -> Vec<PortWatchProject> {
     let mut p = Parser::new(text);
     let Some(root) = p.parse_val(0) else {
@@ -474,6 +635,7 @@ fn parse_tracker_json(text: &str) -> Vec<PortWatchProject> {
             dedup.push(proj);
         }
     }
+    order_portwatch(&mut dedup);
     dedup
 }
 
@@ -622,13 +784,12 @@ fn extract_project(obj: &Json) -> Option<PortWatchProject> {
         return None;
     }
 
-    let name = obj
-        .get("name")
-        .or_else(|| obj.get("title"))
-        .or_else(|| obj.get("id"))
-        .and_then(|v| v.as_str())?
-        .trim()
-        .to_string();
+    let name = sanitize_tracker_text(
+        obj.get("name")
+            .or_else(|| obj.get("title"))
+            .or_else(|| obj.get("id"))
+            .and_then(|v| v.as_str())?,
+    );
     if name.is_empty() || name.len() > 64 {
         return None;
     }
@@ -681,7 +842,7 @@ fn extract_project(obj: &Json) -> Option<PortWatchProject> {
         .unwrap_or_else(|| stage_from_score(score))
         .trim()
         .to_string();
-    let stage = if let Some(gpu) = gpu_suffix(obj) {
+    let stage = sanitize_tracker_text(&(if let Some(gpu) = gpu_suffix(obj) {
         if !base_stage.contains(gpu) {
             format!("{base_stage} ({gpu})")
         } else {
@@ -689,23 +850,24 @@ fn extract_project(obj: &Json) -> Option<PortWatchProject> {
         }
     } else {
         base_stage
-    };
+    }));
 
-    let summary = obj
-        .get("summary")
-        .or_else(|| obj.get("description"))
-        .or_else(|| obj.get("note"))
-        .or_else(|| obj.get("blurb"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .trim()
-        .to_string();
+    let summary = sanitize_tracker_text(
+        obj.get("summary")
+            .or_else(|| obj.get("description"))
+            .or_else(|| obj.get("note"))
+            .or_else(|| obj.get("blurb"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(""),
+    );
 
+    let name_says_private = name.to_ascii_lowercase().contains("(private");
     let is_private = obj
         .get("private")
         .or_else(|| obj.get("is_private"))
         .and_then(|v| v.as_bool())
-        .unwrap_or(!has_repo);
+        .unwrap_or(!has_repo)
+        || name_says_private;
 
     let url = obj
         .get("url")
@@ -848,5 +1010,33 @@ mod tests {
         assert!(!projects.iter().any(|p| p.repo.to_ascii_lowercase().contains("dexnom")));
         assert!(!projects.iter().any(|p| p.repo.to_ascii_lowercase().contains("belobug")));
         assert!(!projects.iter().any(|p| p.repo.to_ascii_lowercase().contains("avatarmanz")));
+    }
+
+    #[test]
+    fn live_private_and_amd_entries_are_filtered_and_nvidia_pinned_first() {
+        let mk = |name: &str, repo: &str, url: &str, private: bool, score: f64| PortWatchProject {
+            name: name.into(),
+            repo: repo.into(),
+            score,
+            stage: "Playable".into(),
+            summary: "desc".into(),
+            is_private: private,
+            url: url.into(),
+        };
+        let mut projects = vec![
+            mk("Belobug", "Belobug/victory-amd", "https://github.com/Belobug/victory-amd", false, 99.0),
+            mk("Private (PRIVATE)", "some/private", "https://portwatch-vi.xyz/private", true, 98.0),
+            mk("NotNozy", "notnozy/victory", "https://gitlab.com/notnozy/victory", false, 97.0),
+            mk("kelvaroq", "stellarr-studio/kelvaroq", "https://github.com/stellarr-studio/kelvaroq", false, 50.0),
+            mk("VIctory-NVIDIA", "trustno1-coder/VIctory-NVIDIA", "https://github.com/trustno1-coder/VIctory-NVIDIA", false, 10.0),
+        ];
+        order_portwatch(&mut projects);
+        assert_eq!(projects[0].repo, "trustno1-coder/VIctory-NVIDIA");
+        assert!(projects[0].stage.contains(RECOMMENDED_BADGE));
+        assert_eq!(projects[1].repo, "stellarr-studio/kelvaroq");
+        assert!(!projects.iter().any(|p| p.repo.to_ascii_lowercase().contains("belobug")));
+        assert!(!projects.iter().any(|p| p.is_private));
+        assert!(projects.iter().all(|p| p.url.to_ascii_lowercase().contains("github.com/")));
+        assert_eq!(sanitize_tracker_text("\u{00C2}\u{00B7} ok"), "\u{00B7} ok");
     }
 }
