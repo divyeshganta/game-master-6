@@ -146,6 +146,7 @@ pub enum Target {
     CycleRelayMode,
     ToggleWideBack,
     CyclePipelineWait,
+    CycleFramePacer,
     ToggleBvhBuilder,
     ToggleMouseCapture,
     RunShaderCensus,
@@ -189,6 +190,16 @@ pub enum Target {
     ImportPresetJson,
     OpenReleasesPage,
     OneClickAutoSetup,
+    ToggleViper,
+    ToggleGameKbm,
+    ViperPanelOpen,
+    ViperPanelBack,
+    ViperCheckUpdate,
+    ViperInstallUpdate,
+    ViperRollback,
+    ViperRepatch,
+    ViperToggleMod(usize),
+    ViperOpenModsDir,
 }
 
 pub const SHADER_PRESETS: [&str; 6] = ["AUTO", "64", "128", "256", "512", "1024"];
@@ -448,6 +459,9 @@ pub struct RenderContext<'a> {
     pub diag_sub: usize,
     pub settings_sub: usize,
     pub update_available: bool,
+    pub viper_panel: bool,
+    pub viper_status: &'a str,
+    pub viper_update_ready: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -787,7 +801,7 @@ pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(R
     );
     draw_text(
         hdc,
-        "v1.6.2",
+        "v1.7.0",
         RECT::new(20, h - 40, 104, h - 20),
         ctx.fonts.small_bold,
         COL_DIM,
@@ -825,7 +839,7 @@ pub unsafe fn paint(hdc: HDC, w: c_int, h: c_int, ctx: &RenderContext) -> Vec<(R
     } else {
         "CACHE NOT PREPARED".into()
     };
-    let header_sub = format!("v1.6.2 · {phase_txt}");
+    let header_sub = format!("v1.7.0 · {phase_txt}");
     draw_text(
         hdc,
         &header_sub,
@@ -1023,7 +1037,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
         ctx.settings.active_runner_kind().badge()
     };
     let gpu_eyebrow = if ctx.sys.gpu_name.is_empty() {
-        format!("DETECTING GPU  ·  {}  ·  v1.6.2", active_tag)
+        format!("DETECTING GPU  ·  {}  ·  v1.7.0", active_tag)
     } else if ctx.sys.vram_gb > 0.5 {
         format!(
             "{}  ·  {:.0} GB VRAM  ·  {}",
@@ -1245,7 +1259,68 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
 
     // ── Primary actions: Prepare Cache (~35%) | Launch Title (~65%) ────────
     let gap = 16;
-    let actions_y = ctl_y + ctl_h + 14;
+    // Compact VIper quick toggle sits directly above the primary LAUNCH/PREPARE actions.
+    let vp_row_y = ctl_y + ctl_h + 2;
+    let vp_row_h = 28;
+    let vp_on = ctx.settings.viper_mods;
+    let vp_lbl = if vp_on { "MODS (VIper): ON" } else { "MODS (VIper): OFF" };
+    let vp_bg = if vp_on { COL_EMERALD_BG } else { COL_PANEL_ALT };
+    let vp_fg = if vp_on { COL_EMERALD } else { COL_MUTED };
+    let vp_bd = if vp_on { COL_EMERALD } else { COL_BORDER };
+    let vp_r = RECT::new(r.left, vp_row_y, r.left + 196, vp_row_y + vp_row_h);
+    rounded_rect(
+        hdc,
+        vp_r,
+        vp_bg,
+        if ctx.hover == Target::ToggleViper { COL_BORDER_HI } else { vp_bd },
+        12,
+    );
+    draw_text(hdc, vp_lbl, vp_r, ctx.fonts.small_bold, vp_fg, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
+    hits.push((vp_r, Target::ToggleViper));
+
+    // GAME KBM: OFF keeps mouse out of the title and stops WASD merging into pad 0,
+    // so the gamepad plays while keyboard/mouse drive the VIper menu.
+    let kb_on = ctx.settings.game_kbm;
+    let kb_lbl = if kb_on { "GAME KBM: ON" } else { "GAME KBM: OFF (Menu Only)" };
+    let kb_r = RECT::new(vp_r.right + 10, vp_row_y, vp_r.right + 224, vp_row_y + vp_row_h);
+    rounded_rect(
+        hdc,
+        kb_r,
+        if kb_on { COL_PANEL_ALT } else { COL_EMERALD_BG },
+        if ctx.hover == Target::ToggleGameKbm { COL_BORDER_HI } else if kb_on { COL_BORDER } else { COL_EMERALD },
+        12,
+    );
+    draw_text(
+        hdc,
+        kb_lbl,
+        kb_r,
+        ctx.fonts.small_bold,
+        if kb_on { COL_MUTED } else { COL_EMERALD },
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+    );
+    hits.push((kb_r, Target::ToggleGameKbm));
+
+    let vp_badge = if crate::viper::is_installed() {
+        let ver = crate::viper::installed_version();
+        let v = if ver.is_empty() { "?".to_string() } else { ver };
+        format!(
+            "VIper v{} \u{00B7} {} mods",
+            v,
+            crate::viper::active_mod_count(std::path::Path::new(&ctx.settings.game_dir))
+        )
+    } else {
+        "VIper: not installed".to_string()
+    };
+    draw_text(
+        hdc,
+        &vp_badge,
+        RECT::new(kb_r.right + 12, vp_row_y, r.right, vp_row_y + vp_row_h),
+        ctx.fonts.small,
+        COL_MUTED,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+    );
+
+    let actions_y = vp_row_y + vp_row_h + 8;
     let actions_h = 74;
     let prep_w = ((r.width() - gap) * 35) / 100;
 
@@ -1341,7 +1416,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
             draw_text(hdc, &title, RECT::new(cr.left + 16, cr.top + 10, cr.right - 340, cr.top + 30), ctx.fonts.small_bold, COL_CORAL, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
             draw_text(hdc, diag, RECT::new(cr.left + 16, cr.top + 34, cr.right - 340, cr.bottom - 10), ctx.fonts.small, COL_TEXT, DT_LEFT | DT_WORDBREAK);
 
-            // Compact × dismiss control (v1.6.2).
+            // Compact × dismiss control (v1.7.0).
             let dis_r = RECT::new(cr.right - 46, cr.top + 12, cr.right - 12, cr.top + 42);
             let zip_r = RECT::new(dis_r.left - 108, cr.top + 16, dis_r.left - 6, cr.top + 52);
             let log_r = RECT::new(zip_r.left - 96, cr.top + 16, zip_r.left - 6, cr.top + 52);
@@ -1573,7 +1648,7 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
             DT_LEFT | DT_VCENTER | DT_SINGLELINE,
         );
         ry += 20;
-        // v1.6.2: one-line bottleneck verdict from the newest session log.
+        // v1.7.0: one-line bottleneck verdict from the newest session log.
         let verdict = crate::telemetry::session_bottleneck_verdict();
         let verdict_col = if verdict.starts_with("Healthy") { COL_EMERALD } else { COL_AMBER };
         draw_text(
@@ -1630,8 +1705,212 @@ unsafe fn draw_home(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT
     }
 }
 
+/// Compact VIper Mods sub-view, rendered inside the RUNNERS tab (no 6th top-level tab).
+unsafe fn draw_viper_panel(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT, Target)>) {
+    draw_text(
+        hdc,
+        "RUNNERS / VIPER MODS",
+        RECT::new(r.left + 24, r.top + 14, r.right - 130, r.top + 44),
+        ctx.fonts.heading,
+        COL_WHITE,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+    );
+    let back_r = RECT::new(r.right - 116, r.top + 16, r.right - 20, r.top + 48);
+    draw_button(
+        hdc,
+        back_r,
+        "BACK",
+        ctx.fonts.small_bold,
+        ctx.hover == Target::ViperPanelBack,
+        COL_CYAN,
+        Target::ViperPanelBack,
+        hits,
+    );
+    draw_line(hdc, r.left + 24, r.top + 54, r.right - 24, r.top + 54, COL_BORDER, 1);
+
+    let installed = crate::viper::is_installed();
+    let ver = crate::viper::installed_version();
+    let ver_txt = if !ver.is_empty() {
+        format!("v{} \u{00B7} installed", ver)
+    } else if installed {
+        "installed (version unknown)".to_string()
+    } else {
+        "not installed".to_string()
+    };
+    draw_text(
+        hdc,
+        &format!("VIper: {}", ver_txt),
+        RECT::new(r.left + 24, r.top + 62, r.right - 24, r.top + 86),
+        ctx.fonts.small_bold,
+        if installed { COL_EMERALD } else { COL_AMBER },
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+    );
+    draw_text(
+        hdc,
+        "Compatibility: VIctory-NVIDIA Bridge (victory.exe + <game>.viper)",
+        RECT::new(r.left + 24, r.top + 88, r.right - 24, r.top + 110),
+        ctx.fonts.small,
+        COL_CYAN,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+    );
+    draw_text(
+        hdc,
+        crate::viper::TRAINER_HOTKEYS,
+        RECT::new(r.left + 24, r.top + 112, r.right - 24, r.top + 172),
+        ctx.fonts.small,
+        COL_TEXT,
+        DT_LEFT | DT_WORDBREAK,
+    );
+
+    let btn_y = r.top + 180;
+    let b1 = RECT::new(r.left + 24, btn_y, r.left + 212, btn_y + 34);
+    draw_button(
+        hdc,
+        b1,
+        "CHECK & UPDATE VIPER",
+        ctx.fonts.small_bold,
+        ctx.hover == Target::ViperCheckUpdate,
+        COL_CYAN,
+        Target::ViperCheckUpdate,
+        hits,
+    );
+    let mut bx = b1.right + 10;
+    if ctx.viper_update_ready {
+        let b2 = RECT::new(bx, btn_y, bx + 154, btn_y + 34);
+        draw_button(
+            hdc,
+            b2,
+            "INSTALL UPDATE",
+            ctx.fonts.small_bold,
+            ctx.hover == Target::ViperInstallUpdate,
+            COL_EMERALD,
+            Target::ViperInstallUpdate,
+            hits,
+        );
+        bx = b2.right + 10;
+    }
+    let b3 = RECT::new(bx, btn_y, bx + 118, btn_y + 34);
+    draw_button(
+        hdc,
+        b3,
+        "ROLLBACK",
+        ctx.fonts.small_bold,
+        ctx.hover == Target::ViperRollback,
+        COL_AMBER,
+        Target::ViperRollback,
+        hits,
+    );
+    bx = b3.right + 10;
+    let br = RECT::new(bx, btn_y, bx + 112, btn_y + 34);
+    draw_button(
+        hdc,
+        br,
+        "RE-PATCH",
+        ctx.fonts.small_bold,
+        ctx.hover == Target::ViperRepatch,
+        COL_CYAN,
+        Target::ViperRepatch,
+        hits,
+    );
+    bx = br.right + 10;
+    let b4 = RECT::new(bx, btn_y, bx + 168, btn_y + 34);
+    draw_button(
+        hdc,
+        b4,
+        "OPEN MODS FOLDER",
+        ctx.fonts.small_bold,
+        ctx.hover == Target::ViperOpenModsDir,
+        COL_TEXT,
+        Target::ViperOpenModsDir,
+        hits,
+    );
+
+    let status_y = btn_y + 42;
+    let status_txt = if ctx.viper_status.is_empty() { "Ready" } else { ctx.viper_status };
+    draw_text(
+        hdc,
+        status_txt,
+        RECT::new(r.left + 24, status_y, r.right - 24, status_y + 24),
+        ctx.fonts.small,
+        if ctx.viper_update_ready { COL_EMERALD } else { COL_MUTED },
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+    );
+
+    let list_top = status_y + 30;
+    if list_top + 60 > r.bottom {
+        return;
+    }
+    let list_r = RECT::new(r.left + 20, list_top, r.right - 20, r.bottom - 14);
+    rounded_rect(hdc, list_r, COL_SIDEBAR, COL_BORDER, 12);
+    let game_dir = std::path::Path::new(&ctx.settings.game_dir);
+    let mods = crate::viper::scan_mods(game_dir);
+    let count = crate::viper::active_mod_count(game_dir);
+    draw_text(
+        hdc,
+        &format!("INSTALLED MODS \u{00B7} {} ACTIVE", count),
+        RECT::new(list_r.left + 14, list_r.top + 8, list_r.right - 14, list_r.top + 30),
+        ctx.fonts.small_bold,
+        COL_CYAN,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+    );
+    draw_text(
+        hdc,
+        "\u{25CF} Ready for Custom Rust Mods",
+        RECT::new(list_r.left + 14, list_r.top + 30, list_r.right - 14, list_r.top + 50),
+        ctx.fonts.small,
+        COL_EMERALD,
+        DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+    );
+
+    let mut y = list_r.top + 54;
+    if mods.is_empty() {
+        draw_text(
+            hdc,
+            "No mods detected. Add a .dll to the mods folder, then rescan from the RUNNERS tab.",
+            RECT::new(list_r.left + 14, y, list_r.right - 14, y + 24),
+            ctx.fonts.small,
+            COL_MUTED,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+        );
+        return;
+    }
+    for (idx, m) in mods.iter().enumerate() {
+        if y + 40 > list_r.bottom - 6 {
+            break;
+        }
+        let row = RECT::new(list_r.left + 10, y, list_r.right - 10, y + 38);
+        rounded_rect(hdc, row, COL_PANEL, COL_BORDER, 8);
+        let state = if m.enabled { "ON" } else { "OFF" };
+        let col = if m.enabled { COL_EMERALD } else { COL_DIM };
+        draw_text(
+            hdc,
+            &format!("{}  [{}]", m.name, state),
+            RECT::new(row.left + 12, row.top, row.right - 104, row.bottom),
+            ctx.fonts.small,
+            col,
+            DT_LEFT | DT_VCENTER | DT_SINGLELINE,
+        );
+        let tgl = RECT::new(row.right - 96, row.top + 5, row.right - 8, row.bottom - 5);
+        draw_button(
+            hdc,
+            tgl,
+            "TOGGLE",
+            ctx.fonts.small_bold,
+            ctx.hover == Target::ViperToggleMod(idx),
+            COL_CYAN,
+            Target::ViperToggleMod(idx),
+            hits,
+        );
+        y += 44;
+    }
+}
+
 unsafe fn draw_runners(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RECT, Target)>) {
     rounded_rect(hdc, r, COL_PANEL, COL_BORDER, 16);
+    if ctx.viper_panel {
+        draw_viper_panel(hdc, r, ctx, hits);
+        return;
+    }
     draw_text(hdc, "MULTI-RUNNER HUB", RECT::new(r.left + 24, r.top + 16, (r.right - 590).max(r.left + 180), r.top + 46), ctx.fonts.heading, COL_WHITE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
     let (sub, sub_col) = if let Some(ref err) = ctx.portwatch.error {
         (
@@ -1656,6 +1935,8 @@ unsafe fn draw_runners(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(R
     draw_button(hdc, b_dir, "RUNNERS DIR", ctx.fonts.small_bold, ctx.hover == Target::OpenRunnersDir, COL_TEXT, Target::OpenRunnersDir, hits);
     let b_url = RECT::new(b_dir.left - 144, r.top + 20, b_dir.left - 10, r.top + 54);
     draw_button(hdc, b_url, "BUILD FROM URL...", ctx.fonts.small_bold, ctx.hover == Target::BuildCustomRepo, COL_EMERALD, Target::BuildCustomRepo, hits);
+    let b_viper = RECT::new(b_url.left - 128, r.top + 20, b_url.left - 10, r.top + 54);
+    draw_button(hdc, b_viper, "VIper Mods", ctx.fonts.small_bold, ctx.hover == Target::ViperPanelOpen, COL_PINK, Target::ViperPanelOpen, hits);
 
     draw_line(hdc, r.left + 24, r.top + 74, r.right - 24, r.top + 74, COL_BORDER, 1);
 
@@ -2244,7 +2525,14 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
     // ── Section 4: DISPLAY, VISUALS & HUD (3-col grid + Upscaler/Loop row) ──
     let disp_lbl = ctx.settings.display_mode_label();
     let hud_sub = if ctx.settings.hud_overlay { ctx.settings.hud_corner_label() } else { "Titlebar stats active" };
-    let s4_items: [(&str, &str, bool, bool, &str, Target); 4] = [
+    let pacer_lbl = match ctx.settings.frame_pacer {
+        24 => "24 FPS · 48 FG",
+        30 => "30 FPS · 60 FG",
+        36 => "36 FPS · 72 FG",
+        _ => "OFF (Uncapped)",
+    };
+    let s4_items: [(&str, &str, bool, bool, &str, Target); 5] = [
+        ("FRAME PACER", "FPS cap for smooth 2x Frame Gen", ctx.settings.frame_pacer != 0, false, pacer_lbl, Target::CycleFramePacer),
         ("DISPLAY CAP", "4K / 1080P / 900P / 720P output", true, false, disp_lbl, Target::CycleDisplayMode),
         ("AMBIENT SHADE", "GI shade fill + crease AO", ctx.settings.ambient_fill, false, if ctx.settings.ambient_fill { "ON" } else { "OFF" }, Target::ToggleAmbientFill),
         ("BVH BUILDER", "Ray-trace BVH acceleration", ctx.settings.bvh_builder, true, if ctx.settings.bvh_builder { "ON" } else { "OFF" }, Target::ToggleBvhBuilder),
@@ -2265,7 +2553,7 @@ unsafe fn draw_tuning(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Vec<(RE
         let c2_gap = 12;
         let c2_w = (inner_w - c2_gap) / 2;
         let last_h = 68;
-        // v1.6.2: NVIDIA-only path — the host upscaler DLL folder row has been removed.
+        // v1.7.0: NVIDIA-only path — the host upscaler DLL folder row has been removed.
         let sl_card = RECT::new(left_x, y, left_x + inner_w, y + last_h);
         rounded_rect(hdc, sl_card, COL_PANEL_ALT, COL_BORDER, 11);
         draw_text(hdc, "SHADER LOOP LIMIT (VICTORY_SHADER_LOOP_LIMIT)", RECT::new(sl_card.left + 12, sl_card.top + 6, sl_card.right - 12, sl_card.top + 24), ctx.fonts.small_bold, COL_PINK, DT_LEFT | DT_VCENTER | DT_SINGLELINE);

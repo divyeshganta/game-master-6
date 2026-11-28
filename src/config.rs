@@ -27,6 +27,9 @@ pub struct Settings {
     pub high_priority: bool,
     pub isolated_cache: bool,
     pub offline_mode: bool,
+    pub viper_mods: bool, // VIper mod framework bridge on the PLAY tab
+    pub game_kbm: bool,   // GAME KBM: OFF => mouse/pad-only game, keyboard reserved for VIper menu
+    pub frame_pacer: u32, // 0 = uncapped, 24 / 30 / 36 FPS cap for smooth 2x FG presentation
     pub theme: String,
     // v6.0 performance & stability tuning
     pub card_buffers_min_mb: String, // "", "1", "4", "8", "16" -> VICTORY_CARD_BUFFERS_MIN_MB
@@ -125,6 +128,9 @@ impl Default for Settings {
             high_priority: true,
             isolated_cache: false,
             offline_mode: false,
+            viper_mods: false,
+            game_kbm: false,
+            frame_pacer: 0,
             theme: "vice".into(),
             // v15.2: Hardware-adaptive BALANCED baseline defaults (12 GB sweet spot)
             card_buffers_min_mb: "4".into(),
@@ -262,6 +268,9 @@ impl Settings {
                     "high_priority" => s.high_priority = parse_bool(v),
                     "isolated_cache" => s.isolated_cache = parse_bool(v),
                     "offline_mode" => s.offline_mode = parse_bool(v),
+                    "viper_mods" => s.viper_mods = parse_bool(v),
+                    "game_kbm" => s.game_kbm = parse_bool(v),
+                    "frame_pacer" => s.frame_pacer = v.parse::<u32>().unwrap_or(0),
                     "theme" => s.theme = v.to_ascii_lowercase(),
                     "card_buffers_min_mb" => s.card_buffers_min_mb = v.to_string(),
                     "card_rehash_runs" => s.card_rehash_runs = parse_bool(v),
@@ -350,7 +359,7 @@ impl Settings {
 
     pub fn save(&self) -> Result<(), String> {
         let mut text = format!(
-            "# Game - GameMaster6 v15.4 settings\n\
+            "# Game - GameMaster6 v1.7.0 settings\n\
              exe={}\n\
              game_dir={}\n\
              runner={}\n\
@@ -436,7 +445,10 @@ impl Settings {
              pinned_baseline_locked={}\n\
              dlss_mode={}\n\
              framegen_x={}\n\
-             frame_interval_us={}\n",
+             frame_interval_us={}\n\
+             viper_mods={}\n\
+             game_kbm={}\n\
+             frame_pacer={}\n",
             self.exe.trim(),
             self.game_dir.trim(),
             self.runner.trim(),
@@ -523,6 +535,9 @@ impl Settings {
             self.dlss_mode.trim(),
             self.framegen_x,
             self.frame_interval_us.trim(),
+            bstr(self.viper_mods),
+            bstr(self.game_kbm),
+            self.frame_pacer,
         );
         for (id, val) in &self.runner_env_overrides {
             if !id.trim().is_empty() && !val.trim().is_empty() {

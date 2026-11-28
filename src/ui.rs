@@ -103,6 +103,12 @@ struct AppState {
     cache_hash_mismatch: bool,
     beats_baseline: bool,
     show_shortcuts: bool,
+    viper_panel: bool,
+    viper_update_rx: Option<Receiver<Result<crate::viper::ReleaseInfo, String>>>,
+    viper_update: Option<Result<crate::viper::ReleaseInfo, String>>,
+    viper_install_rx: Option<Receiver<Result<(), String>>>,
+    viper_status: String,
+    viper_update_ready: bool,
 }
 
 impl AppState {
@@ -231,6 +237,41 @@ impl AppState {
         self.update_rx = Some(rx);
     }
 
+    /// Non-blocking VIper release check: a worker calls check_latest_async() and
+    /// forwards its result to the UI thread, so the message loop never blocks.
+    fn start_viper_check(&mut self) {
+        if self.viper_update_rx.is_some() || self.viper_install_rx.is_some() {
+            return;
+        }
+        self.viper_status = "Checking for VIper updates...".into();
+        self.viper_update_ready = false;
+        let (tx, rx) = channel();
+        thread::spawn(move || {
+            let inner = crate::viper::check_latest_async();
+            let res = inner.recv().unwrap_or_else(|_| Err("Update check finished without a result".into()));
+            let _ = tx.send(res);
+        });
+        self.viper_update_rx = Some(rx);
+    }
+
+    /// Non-blocking download + install of a VIper release zip on a worker thread.
+    fn start_viper_install(&mut self, info: crate::viper::ReleaseInfo) {
+        if self.viper_install_rx.is_some() {
+            return;
+        }
+        self.viper_status = format!("Downloading VIper {}...", info.version);
+        self.viper_update_ready = false;
+        let (tx, rx) = channel();
+        thread::spawn(move || {
+            let res = (|| -> Result<(), String> {
+                let zip = crate::viper::download_release(&info)?;
+                crate::viper::install_from_zip(&zip, &info.version)
+            })();
+            let _ = tx.send(res);
+        });
+        self.viper_install_rx = Some(rx);
+    }
+
     fn start_tip_probe(&mut self) {
         if self.tip_rx.is_some() {
             return;
@@ -334,7 +375,7 @@ unsafe fn show_msg(hwnd: HWND, body: &str, title: &str, flags: UINT) -> c_int {
     MessageBoxW(hwnd, b.as_ptr(), t.as_ptr(), flags)
 }
 
-/// v1.6.2 fresh-PC guard used by both LAUNCH and PREPARE CACHE.
+/// v1.7.0 fresh-PC guard used by both LAUNCH and PREPARE CACHE.
 /// Auto-selects an installed runner when the active binary is missing; otherwise redirects
 /// to the RUNNERS tab with a clear status prompt (never spawns a missing exe).
 unsafe fn ensure_runner_or_redirect(st: &mut AppState, hwnd: HWND) -> bool {
@@ -463,7 +504,7 @@ unsafe fn handle_prepare(hwnd: HWND) {
 
     match launcher::prepare(&st.settings, st.sys.recommended_jobs()) {
         Ok(sess) => {
-            // v1.6.2: a successful cache preparation invalidates any stale crash card.
+            // v1.7.0: a successful cache preparation invalidates any stale crash card.
             st.last_crash = None;
             st.settings.last_prepared_runner_sig = st.settings.runner_signature();
             let _ = st.settings.save();
@@ -1805,6 +1846,22 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             }
             redraw(hwnd);
         }
+        Target::CycleFramePacer => {
+            st.settings.frame_pacer = match st.settings.frame_pacer {
+                24 => 30,
+                30 => 36,
+                36 => 0,
+                _ => 24,
+            };
+            let (fps, us) = launcher::frame_pacer_env(st.settings.frame_pacer);
+            let label = if fps == 1000 {
+                "Frame Pacer: OFF (uncapped, 1000/1000)".to_string()
+            } else {
+                format!("Frame Pacer: {fps} FPS (~{} FG) · interval {us}us", fps * 2)
+            };
+            st.save_settings(&label);
+            redraw(hwnd);
+        }
         Target::ToggleBvhBuilder => {
             st.settings.bvh_builder = !st.settings.bvh_builder;
             st.save_settings(if st.settings.bvh_builder {
@@ -2134,6 +2191,105 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             }
             redraw(hwnd);
         }
+        Target::ToggleViper => {
+            st.settings.viper_mods = !st.settings.viper_mods;
+            st.save_settings(if st.settings.viper_mods {
+                "VIper mods enabled (saved)"
+            } else {
+                "VIper mods disabled (saved)"
+            });
+            redraw(hwnd);
+        }
+        Target::ToggleGameKbm => {
+            st.settings.game_kbm = !st.settings.game_kbm;
+            st.save_settings(if st.settings.game_kbm {
+                "GAME KBM: ON — keyboard/mouse also reach the game"
+            } else {
+                "GAME KBM: OFF — gamepad plays, KBM drives the VIper menu"
+            });
+            redraw(hwnd);
+        }
+        Target::ViperPanelOpen => {
+            st.viper_panel = true;
+            let cur = crate::viper::installed_version();
+            st.viper_update_ready = st
+                .viper_update
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .is_some_and(|i| crate::viper::is_newer(&i.version, &cur));
+            if st.viper_status.is_empty() {
+                st.viper_status = "Ready".into();
+            }
+            redraw(hwnd);
+        }
+        Target::ViperPanelBack => {
+            st.viper_panel = false;
+            redraw(hwnd);
+        }
+        Target::ViperCheckUpdate => {
+            st.start_viper_check();
+            redraw(hwnd);
+        }
+        Target::ViperInstallUpdate => {
+            let info = st
+                .viper_update
+                .as_ref()
+                .and_then(|r| r.as_ref().ok())
+                .cloned();
+            if let Some(info) = info {
+                st.start_viper_install(info);
+            } else {
+                st.set_toast("No VIper update is available to install");
+            }
+            redraw(hwnd);
+        }
+        Target::ViperRollback => {
+            match crate::viper::rollback() {
+                Ok(()) => {
+                    st.viper_status = "Rolled back VIper to previous version".into();
+                    st.viper_update_ready = false;
+                    st.set_toast("VIper rollback complete");
+                }
+                Err(e) => {
+                    st.viper_status = format!("Rollback failed: {e}");
+                    st.set_toast(e);
+                }
+            }
+            redraw(hwnd);
+        }
+        Target::ViperRepatch => {
+            let exe = std::path::PathBuf::from(&st.settings.exe);
+            crate::viper::kill_stray_viper();
+            match crate::viper::repatch(&exe) {
+                Ok(_) => {
+                    st.viper_status = "Mods re-linked into the modded copy".into();
+                    st.set_toast("VIper re-patch complete");
+                }
+                Err(e) => {
+                    st.viper_status = format!("Re-patch failed: {e}");
+                    st.status_text = "VIPER PATCH FAILED".into();
+                    st.status_kind = StatusKind::Error;
+                    st.set_toast(e);
+                }
+            }
+            redraw(hwnd);
+        }
+        Target::ViperOpenModsDir => {
+            let dir = crate::viper::mods_dir(std::path::Path::new(&st.settings.game_dir));
+            let _ = std::fs::create_dir_all(&dir);
+            open_path(hwnd, &dir);
+        }
+        Target::ViperToggleMod(idx) => {
+            let mods = crate::viper::scan_mods(std::path::Path::new(&st.settings.game_dir));
+            if let Some(m) = mods.get(idx) {
+                let name = m.name.clone();
+                match crate::viper::toggle_mod(m) {
+                    Ok(_) => st.set_toast(format!("Toggled mod: {name}")),
+                    Err(e) => st.set_toast(e),
+                }
+                redraw(hwnd);
+            }
+        }
     }
 }
 
@@ -2175,6 +2331,50 @@ unsafe fn on_timer(hwnd: HWND) {
             }
         }
 
+        if let Some(ref rx) = st.viper_update_rx {
+            if let Ok(res) = rx.try_recv() {
+                st.viper_update_rx = None;
+                let cur = crate::viper::installed_version();
+                match &res {
+                    Ok(info) => {
+                        let old = if cur.is_empty() { "none".to_string() } else { format!("v{cur}") };
+                        if crate::viper::is_newer(&info.version, &cur) {
+                            st.viper_status = format!("Update available: {old} -> v{}", info.version);
+                            st.viper_update_ready = true;
+                        } else {
+                            st.viper_status = format!("VIper up to date ({old})");
+                            st.viper_update_ready = false;
+                        }
+                    }
+                    Err(e) => {
+                        st.viper_status = format!("Update check failed: {e}");
+                        st.viper_update_ready = false;
+                    }
+                }
+                st.viper_update = Some(res);
+                changed = true;
+            }
+        }
+        if let Some(ref rx) = st.viper_install_rx {
+            if let Ok(res) = rx.try_recv() {
+                st.viper_install_rx = None;
+                match res {
+                    Ok(()) => {
+                        let v = crate::viper::installed_version();
+                        st.viper_status = format!("Installed VIper v{v}");
+                        st.viper_update = None;
+                        st.viper_update_ready = false;
+                        st.set_toast("VIper update installed");
+                    }
+                    Err(e) => {
+                        st.viper_status = format!("Install failed: {e}");
+                        st.set_toast(e);
+                    }
+                }
+                changed = true;
+            }
+        }
+
         if let Some(ref crx) = st.census_rx {
             match crx.try_recv() {
                 Ok(res) => {
@@ -2208,7 +2408,7 @@ unsafe fn on_timer(hwnd: HWND) {
                 st.gpu_rx = None;
                 if st.is_first_run || st.settings.active_preset.eq_ignore_ascii_case("auto") {
                     st.is_first_run = false;
-                    // v1.6.2: startup AUTO must resolve the hardware tier, not downgrade to BALANCED.
+                    // v1.7.0: startup AUTO must resolve the hardware tier, not downgrade to BALANCED.
                     let _ = crate::presets::apply_adaptive_preset(
                         &mut st.settings,
                         crate::presets::PresetKind::Auto,
@@ -2662,6 +2862,12 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 cache_hash_mismatch: false,
                 beats_baseline: false,
                 show_shortcuts: false,
+                viper_panel: false,
+                viper_update_rx: None,
+                viper_update: None,
+                viper_install_rx: None,
+                viper_status: String::new(),
+                viper_update_ready: false,
             });
             let rp = st.settings.resolved_runner();
             let _ = crate::runners::sync_from_victory_settings(&mut st.settings, &rp);
@@ -2773,6 +2979,9 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 cache_hash_mismatch: st.cache_hash_mismatch,
                 beats_baseline: st.beats_baseline,
                 show_shortcuts: st.show_shortcuts,
+                viper_panel: st.viper_panel,
+                viper_status: &st.viper_status,
+                viper_update_ready: st.viper_update_ready,
                 diag_sub: st.diag_sub,
                 settings_sub: st.settings_sub,
                 update_available: st.update_available,
@@ -3014,7 +3223,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
 
 pub fn run() {
     std::panic::set_hook(Box::new(|info| {
-        let text = format!("GameMaster6 v1.6.2 error:\n\n{info}");
+        let text = format!("GameMaster6 v1.7.0 error:\n\n{info}");
         let dir = Settings::app_dir().join("logs");
         let _ = std::fs::create_dir_all(&dir);
         let _ = std::fs::write(dir.join("crash.txt"), &text);
@@ -3047,7 +3256,7 @@ pub fn run() {
         }
 
         let class = wide("GameMasterViceV2Class");
-        let title = wide("GameMaster6 v1.6.2");
+        let title = wide("GameMaster6 v1.7.0");
         let hinst = GetModuleHandleW(std::ptr::null());
         let wc = WNDCLASSEXW {
             cb_size: std::mem::size_of::<WNDCLASSEXW>() as UINT,
@@ -3233,6 +3442,9 @@ unsafe fn dump_ui_tabs(out_dir: &std::path::Path) {
             cache_hash_mismatch: false,
             beats_baseline: false,
             show_shortcuts: false,
+            viper_panel: false,
+            viper_status: "",
+            viper_update_ready: false,
             diag_sub: 0,
             settings_sub: 0,
             update_available: false,

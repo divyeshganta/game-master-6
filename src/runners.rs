@@ -744,23 +744,12 @@ pub fn is_streamline_runner(exe_path: &Path) -> bool {
 }
 
 pub fn parse_victory_settings(path: &Path) -> Vec<(String, String)> {
-    let Ok(text) = fs::read_to_string(path) else {
+    // v1.7.0: read bytes and strip a UTF-8 BOM before splitting keys, so
+    // VICTORY_MENU_CONSOLE is never duplicated by a BOM-prefixed first line.
+    let Ok(bytes) = fs::read(path) else {
         return Vec::new();
     };
-    let mut out = Vec::new();
-    for line in text.lines() {
-        let t = line.trim();
-        if t.is_empty() || t.starts_with('#') {
-            continue;
-        }
-        if let Some((k, v)) = t.split_once('=') {
-            let key = k.trim().to_string();
-            if !key.is_empty() {
-                out.push((key, v.trim().to_string()));
-            }
-        }
-    }
-    out
+    crate::viper::parse_victory_settings_bytes(&bytes)
 }
 
 /// Reads `victory-settings.txt` beside `runner_path` and syncs Play UI fields
@@ -894,7 +883,7 @@ pub fn sync_to_victory_settings(s: &Settings, runner_path: &Path) -> Result<(), 
         set_kv("VICTORY_OUTPUT", s.display_mode.clone());
     }
     set_kv("VICTORY_FULLSCREEN", if s.borderless { "1" } else { "0" }.into());
-    set_kv("VICTORY_MOUSE_CAPTURE", if s.mouse_capture { "1" } else { "0" }.into());
+    set_kv("VICTORY_MOUSE_CAPTURE", if s.mouse_capture && !crate::launcher::viper_kbm_isolated(s) { "1".into() } else { "0".into() });
     if dlss_active {
         // Zero-Regression Lock: DLSS + FG active; never persist invalid `off`.
         set_kv("VICTORY_DLSS", "1".into());

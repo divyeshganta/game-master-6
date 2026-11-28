@@ -19,6 +19,7 @@ mod shader_heal;
 mod telemetry;
 mod ui;
 mod update_check;
+mod viper;
 mod vram_guard;
 mod win32;
 

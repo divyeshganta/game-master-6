@@ -334,6 +334,26 @@ pub fn guard_runner_available(s: &mut Settings) -> Result<(), &'static str> {
     }
 }
 
+/// v1.7.0: with VIper mods on and GAME KBM off, keep the keyboard/mouse out of the
+/// title (pad plays the game; KBM drives the mod menu). Verified runner env levers:
+/// `VICTORY_MOUSE_CAPTURE=0` removes mouse from the game; `VICTORY_ONE_PAD=0` stops
+/// WASD being merged into pad 0 while a real controller is connected.
+pub fn viper_kbm_isolated(s: &Settings) -> bool {
+    s.viper_mods && !s.game_kbm
+}
+
+/// Frame Pacer presets. Verified in victory.exe source: `VICTORY_MENU_FPS` is the
+/// F1 menu value, while `VICTORY_FRAME_INTERVAL_US` is the real pacer clock
+/// (round(1_000_000 / fps), valid range 1000..=1_000_000). Uncapped = 1000/1000.
+pub fn frame_pacer_env(fps: u32) -> (u32, u32) {
+    match fps {
+        24 => (24, 41667),
+        30 => (30, 33333),
+        36 => (36, 27778),
+        _ => (1000, 1000),
+    }
+}
+
 /// Short status hint used when redirecting to the RUNNERS tab.
 pub fn missing_runner_hint() -> &'static str {
     "Install Victory-NVIDIA first"
@@ -351,7 +371,10 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
 
     // Automatic pre-launch stray cleanup: terminate any orphan victory.exe and wait 1s
     // so the new launch never fights a ghost process for VRAM.
-    let killed = kill_stray_runners();
+    let mut killed = kill_stray_runners();
+    if s.viper_mods {
+        killed += crate::viper::kill_stray_viper(); // avoid a patcher holding game files open
+    }
     if killed > 0 {
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
@@ -438,12 +461,24 @@ pub fn start(s: &Settings, sys: &SystemInfo) -> Result<ActiveSession, String> {
     let mut cmd = Command::new(&runner_path);
     let extra_args = split_args(&s.title_args);
 
+    // v1.7.0 VIper bridge: when MODS (VIper) is ON, ask VIper to link every
+    // mods/*.dll into a <game>.viper copy, then run THAT copy through the
+    // verified VIctory-NVIDIA runner (DLSS + 2x FG untouched).
+    let effective_exe = if s.viper_mods {
+        match crate::viper::ensure_patched(Path::new(&s.exe)) {
+            Ok(p) => p.to_string_lossy().into_owned(),
+            Err(e) => return Err(e),
+        }
+    } else {
+        s.exe.clone()
+    };
+
     if kind.is_victory_family() {
         cmd.arg("run")
             .arg("--console")
             .arg(&s.console_model)
             .arg("--execute")
-            .arg(&s.exe);
+            .arg(&effective_exe);
         if !extra_args.is_empty() {
             cmd.arg("--");
             for arg in extra_args {
@@ -1213,8 +1248,8 @@ pub fn resolve_victory_launch_env(
         set("VICTORY_MENU_RES", if native_1440 { "1440" } else if s.display_mode.trim() == "1920x1080" { "1080" } else { "1440" }.into());
 
         // Uncapped FPS by default (1000 = NONE in F1 menu; never 20 FPS / 50000 us)
-        set("VICTORY_MENU_FPS", "1000".into());
-        set("VICTORY_FRAME_INTERVAL_US", "1000".into());
+        set("VICTORY_MENU_FPS", frame_pacer_env(s.frame_pacer).0.to_string());
+        set("VICTORY_FRAME_INTERVAL_US", frame_pacer_env(s.frame_pacer).1.to_string());
 
         let tex_room = if s.texture_room_percent.trim().is_empty() {
             if sys.vram_gb < 7.0 { "60" } else if sys.vram_gb < 9.5 { "68" } else if sys.vram_gb < 11.0 { "80" } else { "85" }
@@ -1226,7 +1261,11 @@ pub fn resolve_victory_launch_env(
         // Native FULLSCREEN (NO BORDER) = ON when Borderless Fullscreen is selected
         set("VICTORY_FULLSCREEN", if s.borderless { "1" } else { "0" }.into());
         set("VICTORY_BORDERLESS", if s.borderless { "1" } else { "0" }.into());
-        set("VICTORY_MOUSE_CAPTURE", if s.mouse_capture { "1" } else { "0" }.into());
+        let isolated = viper_kbm_isolated(s);
+        set("VICTORY_MOUSE_CAPTURE", if s.mouse_capture && !isolated { "1".into() } else { "0".into() });
+        if isolated {
+            set("VICTORY_ONE_PAD", "0".into());
+        }
         set("VICTORY_LOG", s.effective_victory_log().to_string());
 
         // DLSS & Frame Gen from Settings
@@ -1262,12 +1301,16 @@ pub fn resolve_victory_launch_env(
         set("VICTORY_FULLSCREEN", if s.borderless { "1".into() } else { "0".into() });
         set("VICTORY_BORDERLESS", if s.borderless { "1".into() } else { "0".into() });
         // 2. Cursor capture; native keyboard/mouse; no PowerShell in-game
-        set("VICTORY_MOUSE_CAPTURE", if s.mouse_capture { "1".into() } else { "0".into() });
+        let isolated = viper_kbm_isolated(s);
+        set("VICTORY_MOUSE_CAPTURE", if s.mouse_capture && !isolated { "1".into() } else { "0".into() });
+        if isolated {
+            set("VICTORY_ONE_PAD", "0".into());
+        }
         // 5. FPS & DLSS/FG; 1440p; no 4K; no 20us/50000us
         set("VICTORY_ASYNC_SUBMIT", "1".into());
         set("VICTORY_THIN", "1".into());
-        set("VICTORY_MENU_FPS", "1000".into());
-        set("VICTORY_FRAME_INTERVAL_US", "1000".into());
+        set("VICTORY_MENU_FPS", frame_pacer_env(s.frame_pacer).0.to_string());
+        set("VICTORY_FRAME_INTERVAL_US", frame_pacer_env(s.frame_pacer).1.to_string());
         set("VICTORY_NATIVE_1440P", if native_1440 { "1".into() } else { "0".into() });
         set("VICTORY_MENU_RES", if native_1440 { "1440".into() } else { "1080".into() });
         set("VICTORY_MENU_FG_TYPE", "auto".into());
@@ -1278,6 +1321,8 @@ pub fn resolve_victory_launch_env(
         drop(set);
         // NO VICTORY_CARD_ROOM_FOR_TARGETS_MB anywhere
         out.retain(|(k, _)| !k.eq_ignore_ascii_case("VICTORY_CARD_ROOM_FOR_TARGETS_MB"));
+        // `..._MS` would silently override our pacer clock; never let it through.
+        out.retain(|(k, _)| !k.eq_ignore_ascii_case("VICTORY_FRAME_INTERVAL_MS"));
 
         return out;
     }
@@ -1504,6 +1549,56 @@ mod tests {
         assert!(crate::diagnostics::logs_dir().is_dir());
         assert!(crate::saves::backups_dir().is_dir());
         assert!(crate::saves::saves_backups_dir().is_dir());
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn frame_pacer_env_presets_and_generation() {
+        assert_eq!(frame_pacer_env(0), (1000, 1000));
+        assert_eq!(frame_pacer_env(24), (24, 41667));
+        assert_eq!(frame_pacer_env(30), (30, 33333));
+        assert_eq!(frame_pacer_env(36), (36, 27778));
+        assert_eq!(frame_pacer_env(99), (1000, 1000));
+        let tmp = std::env::temp_dir().join(format!("gm_pacer_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let exe = tmp.join("victory.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        std::fs::write(tmp.join("sl.interposer.dll"), b"DLL").unwrap();
+        let mut s = Settings::default();
+        s.frame_pacer = 30;
+        let env = resolve_victory_launch_env(&s, &exe, crate::runners::RunnerKind::Victory, &SystemInfo::default());
+        let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("VICTORY_MENU_FPS"), Some("30"));
+        assert_eq!(get("VICTORY_FRAME_INTERVAL_US"), Some("33333"));
+        assert_eq!(get("VICTORY_FRAME_INTERVAL_MS"), None);
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn viper_kbm_isolation_is_pad_safe() {
+        let tmp = std::env::temp_dir().join(format!("gm_kbm_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&tmp);
+        std::fs::create_dir_all(&tmp).unwrap();
+        let exe = tmp.join("victory.exe");
+        std::fs::write(&exe, b"MZ").unwrap();
+        std::fs::write(tmp.join("sl.interposer.dll"), b"DLL").unwrap();
+        let mut s = Settings::default();
+        s.mouse_capture = true;
+        s.viper_mods = true;
+        s.game_kbm = false;
+        let mut sys = SystemInfo::default();
+        sys.vram_gb = 12.0;
+        assert!(viper_kbm_isolated(&s));
+        let env = resolve_victory_launch_env(&s, &exe, crate::runners::RunnerKind::Victory, &sys);
+        let get = |k: &str| env.iter().find(|(ek, _)| ek == k).map(|(_, v)| v.as_str());
+        assert_eq!(get("VICTORY_MOUSE_CAPTURE"), Some("0"));
+        assert_eq!(get("VICTORY_ONE_PAD"), Some("0"));
+        s.game_kbm = true;
+        assert!(!viper_kbm_isolated(&s));
+        let env2 = resolve_victory_launch_env(&s, &exe, crate::runners::RunnerKind::Victory, &sys);
+        assert_eq!(env2.iter().find(|(k, _)| k == "VICTORY_MOUSE_CAPTURE").map(|(_, v)| v.as_str()), Some("1"));
+        assert!(!env2.iter().any(|(k, _)| k == "VICTORY_ONE_PAD"));
         let _ = std::fs::remove_dir_all(&tmp);
     }
 
