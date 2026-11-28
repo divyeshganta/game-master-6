@@ -2763,7 +2763,8 @@ unsafe fn draw_diagnostics(hdc: HDC, r: RECT, ctx: &RenderContext, hits: &mut Ve
         draw_text(hdc, label, tr, ctx.fonts.small_bold, if active { COL_CYAN } else { COL_MUTED }, DT_CENTER | DT_VCENTER | DT_SINGLELINE);
         hits.push((tr, Target::DiagSub(i)));
     }
-    let inner = RECT::new(r.left + 8, r.top + 50, r.right - 8, r.bottom - 8);
+    draw_text(hdc, "DIAGNOSTICS", RECT::new(r.left + 24, r.top + 48, r.right - 24, r.top + 48 + 22), ctx.fonts.heading, COL_WHITE, DT_LEFT | DT_VCENTER | DT_SINGLELINE);
+    let inner = RECT::new(r.left + 8, r.top + 72, r.right - 8, r.bottom - 8);
     if ctx.diag_sub == 1 {
         draw_logs(hdc, inner, ctx, hits);
     } else {
