@@ -2172,7 +2172,7 @@ unsafe fn on_timer(hwnd: HWND) {
                 st.sys.gpu_driver = gdrv;
                 st.sys.vram_gb = vram;
                 st.gpu_rx = None;
-                if st.is_first_run {
+                if st.is_first_run || st.settings.active_preset.eq_ignore_ascii_case("auto") {
                     st.is_first_run = false;
                     let _ = crate::presets::apply_adaptive_preset(
                         &mut st.settings,
