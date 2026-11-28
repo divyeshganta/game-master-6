@@ -66,6 +66,7 @@ struct AppState {
     tuning_scroll: usize,
     last_mouse_x: i32,
     backup_count: usize,
+    save_snapshots: Vec<saves::SaveSnapshot>,
     slow_shaders: Vec<SlowShader>,
     ram_history: Vec<u32>,
     commit_history: Vec<u32>,
@@ -139,6 +140,7 @@ impl AppState {
         self.audit = AssetAudit::scan(&self.settings, &self.sys);
         self.runners = discover_runners(&self.settings);
         self.backup_count = saves::count_backups();
+        self.save_snapshots = saves::list_save_snapshots();
         self.mods = saves::list_mods(8);
         self.mod_count = self.mods.len();
         let installed: Vec<String> = self
@@ -421,7 +423,7 @@ unsafe fn handle_prepare(hwnd: HWND) {
             MB_ICONQUESTION | MB_YESNO,
         );
         if ans != IDYES {
-            st.set_toast("Shader cache already prepared â€” ready to launch!");
+            st.set_toast("Shader cache already prepared — ready to launch!");
             redraw(hwnd);
             return;
         }
@@ -1439,7 +1441,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             } else {
                 show_msg(hwnd, &summary, "Auto Enhance Complete", MB_ICONINFORMATION | MB_OK);
             }
-            st.set_toast("Auto Enhance complete â€” system optimized for runner!");
+            st.set_toast("Auto Enhance complete — system optimized for runner!");
             redraw(hwnd);
         }
         Target::RumblePad(slot) => {
@@ -1538,7 +1540,32 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
             });
             redraw(hwnd);
         }
+        Target::OpenSnapshotFolder => {
+            open_path(hwnd, &saves::saves_backups_dir());
+            redraw(hwnd);
+        }
+        Target::RestoreSnapshot(idx) => {
+            let snaps = saves::list_save_snapshots();
+            if let Some(snap) = snaps.get(idx) {
+                let ans = show_msg(
+                    hwnd,
+                    &format!("Restore save snapshot '{}' back into %LOCALAPPDATA%\\victory\\data?\n\nCurrent save files will be overwritten.", snap.name),
+                    "Restore Save Backup",
+                    MB_ICONQUESTION | MB_YESNO,
+                );
+                if ans == IDYES {
+                    match saves::restore_backup(&snap.path) {
+                        Ok((name, n)) => st.set_toast(format!("Restored {n} save file(s) from {name}")),
+                        Err(e) => { show_msg(hwnd, &e, "Restore Failed", MB_ICONERROR | MB_OK); }
+                    }
+                }
+            }
+            st.save_snapshots = saves::list_save_snapshots();
+            st.backup_count = saves::count_backups();
+            redraw(hwnd);
+        }
         Target::RestoreLatestSave => {
+
             if let Some((name, _)) = saves::latest_backup() {
                 let ans = show_msg(
                     hwnd,
@@ -1756,7 +1783,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         Target::ToggleAsyncSubmit => {
             st.settings.async_submit = !st.settings.async_submit;
             st.save_settings(if st.settings.async_submit {
-                "Async GPU submit enabled (VICTORY_ASYNC_SUBMIT=1 â€” A/B test one switch at a time)"
+                "Async GPU submit enabled (VICTORY_ASYNC_SUBMIT=1 — A/B test one switch at a time)"
             } else {
                 "Async GPU submit disabled"
             });
@@ -1814,7 +1841,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         Target::ToggleDisplay1080p => {
             st.settings.display_1080p = !st.settings.display_1080p;
             st.save_settings(if st.settings.display_1080p {
-                "1080p cap enabled (VICTORY_DISPLAY_MODE=1920x1080 â€” 4x fewer pixels than 4K)"
+                "1080p cap enabled (VICTORY_DISPLAY_MODE=1920x1080 — 4x fewer pixels than 4K)"
             } else {
                 "Display mode set to native 4K (3840x2160)"
             });
@@ -1841,7 +1868,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         Target::ToggleInplaceBuf => {
             st.settings.inplace_buf = !st.settings.inplace_buf;
             st.save_settings(if st.settings.inplace_buf {
-                "In-place buffer mapping enabled (VICTORY_INPLACE=1 â€” experimental)"
+                "In-place buffer mapping enabled (VICTORY_INPLACE=1 — experimental)"
             } else {
                 "In-place buffer mapping disabled"
             });
@@ -1966,7 +1993,7 @@ unsafe fn handle_click(hwnd: HWND, target: Target) {
         Target::ToggleThinLists => {
             st.settings.thin_lists = !st.settings.thin_lists;
             st.save_settings(if st.settings.thin_lists {
-                "Parallel draw-call translation enabled (VICTORY_THIN=1 â€” experimental)"
+                "Parallel draw-call translation enabled (VICTORY_THIN=1 — experimental)"
             } else {
                 "Parallel draw-call translation disabled (VICTORY_THIN=0)"
             });
@@ -2556,6 +2583,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 tuning_scroll: 0,
                 last_mouse_x: 0,
                 backup_count: saves::count_backups(),
+                save_snapshots: saves::list_save_snapshots(),
                 slow_shaders: Vec::new(),
                 ram_history: vec![init_ram; 2],
                 commit_history: vec![init_commit; 2],
@@ -2688,6 +2716,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
                 runner_benches: &st.runner_benches,
                 mods: &st.mods,
                 backup_count: st.backup_count,
+                save_snapshots: &st.save_snapshots,
                 slow_shaders: &st.slow_shaders,
                 ram_history: &st.ram_history,
                 commit_history: &st.commit_history,
@@ -2950,7 +2979,7 @@ unsafe extern "system" fn wnd_proc(hwnd: HWND, msg: UINT, wparam: WPARAM, lparam
 
 pub fn run() {
     std::panic::set_hook(Box::new(|info| {
-        let text = format!("GameMaster6 v1.6.0 error:\n\n{info}");
+        let text = format!("GameMaster6 v1.6.1 error:\n\n{info}");
         let dir = Settings::app_dir().join("logs");
         let _ = std::fs::create_dir_all(&dir);
         let _ = std::fs::write(dir.join("crash.txt"), &text);
@@ -2983,7 +3012,7 @@ pub fn run() {
         }
 
         let class = wide("GameMasterViceV2Class");
-        let title = wide("GameMaster6 v1.6.0");
+        let title = wide("GameMaster6 v1.6.1");
         let hinst = GetModuleHandleW(std::ptr::null());
         let wc = WNDCLASSEXW {
             cb_size: std::mem::size_of::<WNDCLASSEXW>() as UINT,
@@ -3147,6 +3176,7 @@ unsafe fn dump_ui_tabs(out_dir: &std::path::Path) {
             runner_benches: &runner_benches,
             mods: &mods,
             backup_count: saves::count_backups(),
+            save_snapshots: &saves::list_save_snapshots(),
             slow_shaders: &slow_shaders,
             ram_history: &ram_history,
             commit_history: &commit_history,

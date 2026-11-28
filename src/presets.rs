@@ -517,6 +517,37 @@ mod tests {
     }
 
     #[test]
+    fn rtx5070ti_laptop_hybrid_is_nvidia_blackwell_and_auto_series_x() {
+        let name = "NVIDIA GeForce RTX 5070 Ti Laptop GPU";
+        assert!(crate::diagnostics::is_nvidia_gpu(name));
+        let arch = crate::diagnostics::GpuArch::detect(name);
+        assert_eq!(arch, crate::diagnostics::GpuArch::NvidiaBlackwell);
+        assert!(arch.is_nvidia());
+        assert!(NvidiaGen::detect(arch).is_nvidia());
+        assert_ne!(NvidiaGen::detect(arch), NvidiaGen::NonNvidia);
+        let hybrid = "Intel(R) UHD Graphics; NVIDIA GeForce RTX 5070 Ti Laptop GPU";
+        assert!(crate::diagnostics::is_nvidia_gpu(hybrid));
+        assert_eq!(crate::diagnostics::GpuArch::detect(hybrid), crate::diagnostics::GpuArch::NvidiaBlackwell);
+        assert!(NvidiaGen::non_nvidia_warning().contains("NVIDIA RTX"));
+        let a = nvidia_auto_preset(arch, 12.0);
+        assert_eq!(a.console_model, "series-x");
+        assert_eq!(a.display_mode, "2560x1440");
+        assert_eq!(a.dlss_mode, "balanced");
+        assert_eq!(a.framegen_x, 2);
+        assert_eq!(a.texture_room_percent, "85");
+        let mut s = Settings::default();
+        let mut info = sys(arch, 12.0);
+        info.gpu_name = name.into();
+        let _ = apply_adaptive_preset(&mut s, PresetKind::Auto, &info);
+        assert_eq!(s.console_model, "series-x");
+        assert_eq!(s.display_mode, "2560x1440");
+        assert_eq!(s.dlss_mode, "balanced");
+        assert_eq!(s.framegen_x, 2);
+        assert_eq!(s.texture_room_percent, "85");
+        assert_eq!(s.active_preset, "auto");
+    }
+
+    #[test]
     fn rtx5070ti_12gb_auto_emits_85_and_no_card_room() {
         let mut s = Settings::default();
         let _ = apply_adaptive_preset(&mut s, PresetKind::Auto, &sys(GpuArch::NvidiaBlackwell, 12.0));

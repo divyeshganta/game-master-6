@@ -1407,6 +1407,11 @@ pub fn probe_primary_gpu() -> (String, String) {
         return ("Direct3D 12 GPU".into(), String::new());
     };
     let text = String::from_utf8_lossy(&out.stdout);
+    // On hybrid laptops Windows lists integrated graphics AND a discrete NVIDIA RTX.
+    // Always prefer a discrete NVIDIA (RTX/GeForce/NVIDIA) adapter; never let an
+    // integrated Intel/AMD adapter mask it. Scan every adapter before deciding.
+    let mut nvidia: Option<(String, String)> = None;
+    let mut discrete: Option<(String, String)> = None;
     let mut best: Option<(String, String)> = None;
     for line in text.lines() {
         let l = line.trim();
@@ -1417,16 +1422,25 @@ pub fn probe_primary_gpu() -> (String, String) {
                 continue;
             }
             let lo = n.to_ascii_lowercase();
-            // Prefer discrete NVIDIA / RTX / RX GPU over integrated graphics
-            if lo.contains("nvidia") || lo.contains("rtx") || lo.contains("radeon rx") {
-                return (n.to_string(), d.to_string());
-            }
+            let is_integrated = lo.contains("intel") || lo.contains("uhd") || lo.contains("iris")
+                || lo.contains("radeon graphics") || lo.contains("radeon(tm) graphics") || lo.contains("vega");
+            let entry = (n.to_string(), d.to_string());
             if best.is_none() {
-                best = Some((n.to_string(), d.to_string()));
+                best = Some(entry.clone());
+            }
+            if crate::diagnostics::is_nvidia_gpu(n) {
+                if nvidia.is_none() {
+                    nvidia = Some(entry.clone());
+                }
+            } else if !is_integrated && discrete.is_none() {
+                discrete = Some(entry.clone());
             }
         }
     }
-    best.unwrap_or_else(|| ("Direct3D 12 GPU".into(), String::new()))
+    nvidia
+        .or(discrete)
+        .or(best)
+        .unwrap_or_else(|| ("Direct3D 12 GPU".into(), String::new()))
 }
 
 /// Enables Windows 10/11 native dark titlebar via dwmapi.dll (dynamic load, zero link issues).

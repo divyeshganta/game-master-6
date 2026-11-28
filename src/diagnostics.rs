@@ -33,7 +33,7 @@ impl GpuArch {
         if lower.is_empty() {
             return GpuArch::Unknown;
         }
-        if lower.contains("nvidia") || lower.contains("geforce") || lower.contains("rtx") {
+        if is_nvidia_gpu(gpu_name) {
             if lower.contains("rtx 50")
                 || lower.contains("5090")
                 || lower.contains("5080")
@@ -73,6 +73,23 @@ impl GpuArch {
             GpuArch::Other => "Non-NVIDIA GPU",
         }
     }
+}
+
+/// Returns true when `gpu_name` denotes an NVIDIA discrete GPU (RTX/GeForce/NVIDIA).
+///
+/// On hybrid laptops (e.g. Intel Graphics + NVIDIA GeForce RTX 5070 Ti Laptop GPU)
+/// a discrete NVIDIA RTX adapter MUST NOT be masked by an integrated Intel/AMD adapter.
+/// `RTX 50` (Blackwell) and `RTX 5070 Ti` are always treated as NVIDIA.
+pub fn is_nvidia_gpu(gpu_name: &str) -> bool {
+    let lower = gpu_name.to_ascii_lowercase();
+    if lower.trim().is_empty() {
+        return false;
+    }
+    lower.contains("nvidia")
+        || lower.contains("geforce")
+        || lower.contains("rtx")
+        || lower.contains("rtx 50")
+        || lower.contains("rtx 5070")
 }
 
 #[derive(Clone, Debug, Default)]
@@ -253,22 +270,6 @@ impl AssetAudit {
             "Built-in Xbox Upscaler",
             &game.join("amd_fidelityfx_upscaler_xbox.dll"),
         ));
-
-        let mut upscaler_detail = "NOT CONFIGURED".to_string();
-        let mut upscaler_ok = false;
-        if !s.upscaler_dir.trim().is_empty() {
-            let up = Path::new(s.upscaler_dir.trim());
-            if up.is_dir() {
-                if let Some(dll_name) = find_host_upscaler_dll(up) {
-                    upscaler_ok = true;
-                    upscaler_detail = format!("{dll_name} · READY");
-                } else {
-                    upscaler_detail = "FOLDER HAS NO DLLS".into();
-                }
-            } else {
-                upscaler_detail = "FOLDER MISSING".into();
-            }
-        }
         let rpf_names = [
             "common.rpf", "textures.rpf", "levels.rpf", "data.rpf",
             "audio.rpf", "script.rpf", "anim.rpf", "movies.rpf",
@@ -283,15 +284,7 @@ impl AssetAudit {
             detail: format!("{rpf_found}/{} PRESENT", rpf_names.len()),
         });
 
-        items.push(AssetCheck {
-            name: "Host Upscaler Folder",
-            role: "Optional Series S Boost",
-            path: if s.upscaler_dir.is_empty() { "(none)".into() } else { s.upscaler_dir.clone() },
-            present: upscaler_ok,
-            detail: upscaler_detail,
-        });
-
-        // Core checks are the first 6 items (upscaler folder is optional)
+        // Core checks are the first 7 items
         let core_total = 7usize;
         let core_passed = items.iter().take(core_total).filter(|i| i.present).count();
 
@@ -387,35 +380,6 @@ fn check_file(name: &'static str, role: &'static str, path: &Path) -> AssetCheck
 }
 
 /// Picks the primary host FidelityFX DLL filename in `dir` (preferring `amd_fidelityfx_upscaler_dx12.dll`).
-fn find_host_upscaler_dll(dir: &Path) -> Option<String> {
-    let mut first_dll: Option<String> = None;
-    let rd = fs::read_dir(dir).ok()?;
-    for e in rd.flatten() {
-        let p = e.path();
-        if !p.is_file() {
-            continue;
-        }
-        let is_dll = p
-            .extension()
-            .and_then(|s| s.to_str())
-            .map(|ext| ext.eq_ignore_ascii_case("dll"))
-            .unwrap_or(false);
-        if !is_dll {
-            continue;
-        }
-        if let Some(name) = p.file_name().and_then(|s| s.to_str()) {
-            if name.eq_ignore_ascii_case("amd_fidelityfx_upscaler_dx12.dll")
-                || name.eq_ignore_ascii_case("amd_fidelityfx_dx12.dll")
-            {
-                return Some(name.to_string());
-            }
-            if first_dll.is_none() {
-                first_dll = Some(name.to_string());
-            }
-        }
-    }
-    first_dll
-}
 
 /// Returns true if a log line is a known NVIDIA wave32 runner limitation rather than a user-config error.
 pub fn is_known_wave32_note(line: &str) -> bool {

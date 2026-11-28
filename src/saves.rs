@@ -65,7 +65,63 @@ pub fn count_backups() -> usize {
     n
 }
 
+
+#[derive(Clone, Debug)]
+pub struct SaveSnapshot {
+    pub name: String,
+    pub size_bytes: u64,
+    pub timestamp: String,
+    pub path: PathBuf,
+}
+
+/// Lists existing `.zip` save snapshots in `backups\saves\`, newest first.
+pub fn list_save_snapshots() -> Vec<SaveSnapshot> {
+    let mut items: Vec<(std::time::SystemTime, SaveSnapshot)> = Vec::new();
+    if let Ok(rd) = fs::read_dir(saves_backups_dir()) {
+        for e in rd.flatten() {
+            let p = e.path();
+            if !p.is_file() { continue; }
+            if !p.extension().and_then(|x| x.to_str()).is_some_and(|x| x.eq_ignore_ascii_case("zip")) { continue; }
+            let meta = e.metadata().ok();
+            let size = meta.as_ref().map(|m| m.len()).unwrap_or(0);
+            let mtime = meta.and_then(|m| m.modified().ok()).unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+            let name = p.file_name().unwrap_or_default().to_string_lossy().into_owned();
+            let timestamp = format_system_time(mtime);
+            items.push((mtime, SaveSnapshot { name, size_bytes: size, timestamp, path: p }));
+        }
+    }
+    items.sort_by(|a, b| b.0.cmp(&a.0));
+    items.into_iter().map(|(_, s)| s).collect()
+}
+
+fn format_system_time(t: std::time::SystemTime) -> String {
+    let secs = t.duration_since(std::time::SystemTime::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    unix_secs_to_string(secs)
+}
+
+pub fn unix_secs_to_string(secs: u64) -> String {
+    let days = (secs / 86400) as i64;
+    let tod = secs % 86400;
+    let (hh, mm, ss) = (tod / 3600, (tod % 3600) / 60, tod % 60);
+    let (y, mo, d) = civil_from_days(days);
+    format!("{y:04}-{mo:02}-{d:02} {hh:02}:{mm:02}:{ss:02}")
+}
+
+fn civil_from_days(z: i64) -> (i64, u32, u32) {
+    let z = z + 719468;
+    let era = if z >= 0 { z } else { z - 146096 } / 146097;
+    let doe = (z - era * 146097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe as i64 + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
+    (if m <= 2 { y + 1 } else { y }, m, d)
+}
+
 pub fn count_mods() -> usize {
+
     fs::read_dir(mods_dir())
         .map(|rd| rd.flatten().count())
         .unwrap_or(0)
@@ -116,7 +172,27 @@ pub fn backup_saves() -> Result<(PathBuf, usize), String> {
     Ok((zip_path, files))
 }
 
+
+/// Restores a specific `.zip` save snapshot back into the save data directory.
+pub fn restore_backup(zip_path: &Path) -> Result<(String, usize), String> {
+    if !zip_path.is_file() {
+        return Err(format!("Snapshot not found: {}", zip_path.display()));
+    }
+    let Some(dst) = shared_save_vault_dir() else {
+        return Err("Could not resolve save data directory.".into());
+    };
+    let name = zip_path.file_name().unwrap_or_default().to_string_lossy().into_owned();
+    if dst.is_dir() {
+        let pre = saves_backups_dir().join(format!("saves-pre-restore-{}.zip", local_timestamp_filename()));
+        let _ = zip_dir_to(&dst, &pre);
+    }
+    fs::create_dir_all(&dst).map_err(|e| format!("Could not prepare save destination: {e}"))?;
+    let files = unzip_to(zip_path, &dst)?;
+    Ok((name, files))
+}
+
 /// Restores the latest save backup snapshot (ZIP or folder) back into the save data directory.
+
 /// A safety snapshot is taken first. Original unrelated files are left intact.
 pub fn restore_latest_backup() -> Result<(String, usize), String> {
     let Some((name, src)) = latest_backup() else {
